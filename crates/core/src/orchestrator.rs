@@ -281,15 +281,15 @@ impl Orchestrator {
     }
 
     fn get_stealth_engine(&self) -> Result<&Arc<dyn BrowsingEngine>, EngineError> {
-        self.stealth_engine.as_ref().ok_or_else(|| {
-            EngineError::Internal("Stealth-HTTP engine not registered".into())
-        })
+        self.stealth_engine
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("Stealth-HTTP engine not registered".into()))
     }
 
     fn get_browser_engine(&self) -> Result<&Arc<dyn BrowsingEngine>, EngineError> {
-        self.browser_engine.as_ref().ok_or_else(|| {
-            EngineError::Internal("Browser engine not registered".into())
-        })
+        self.browser_engine
+            .as_ref()
+            .ok_or_else(|| EngineError::Internal("Browser engine not registered".into()))
     }
 
     async fn set_active_layer(&self, layer: Layer) {
@@ -364,7 +364,8 @@ impl Orchestrator {
 fn detect_captcha_in_snapshot(tree: &str) -> Option<CaptchaType> {
     let lower = tree.to_lowercase();
 
-    if lower.contains("cf-turnstile") || lower.contains("cloudflare") && lower.contains("challenge") {
+    if lower.contains("cf-turnstile") || lower.contains("cloudflare") && lower.contains("challenge")
+    {
         return Some(CaptchaType::CloudflareTurnstile);
     }
     if lower.contains("h-captcha") || lower.contains("hcaptcha") {

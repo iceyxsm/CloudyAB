@@ -37,11 +37,7 @@ impl TlsProfiles {
                 "compress_certificate".into(),
                 "application_settings".into(),
             ],
-            elliptic_curves: vec![
-                "X25519".into(),
-                "P-256".into(),
-                "P-384".into(),
-            ],
+            elliptic_curves: vec!["X25519".into(), "P-256".into(), "P-384".into()],
             ec_point_formats: vec!["uncompressed".into()],
         }
     }

@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use cloudyab_types::{
-    CaptchaResult, CaptchaType, Cookie, CookieJar, NavigationResult, PageSnapshot,
-    SessionConfig, SnapshotOptions,
+    CaptchaResult, CaptchaType, Cookie, CookieJar, NavigationResult, PageSnapshot, SessionConfig,
+    SnapshotOptions,
 };
 
 /// Trait for a browsing engine (HTTP stealth or full browser).

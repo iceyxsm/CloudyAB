@@ -228,11 +228,7 @@ async fn run_navigation(state: &AppState, request: &TaskRequest) -> Result<TaskR
 
     let snapshot = if request.snapshot.unwrap_or(false) {
         let options = cloudyab_types::page::SnapshotOptions::default();
-        orchestrator
-            .snapshot(&options)
-            .await
-            .ok()
-            .map(|s| s.tree)
+        orchestrator.snapshot(&options).await.ok().map(|s| s.tree)
     } else {
         None
     };

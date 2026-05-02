@@ -124,17 +124,18 @@ impl Solver for TextOcrSolver {
         let tensor = preprocess::to_grayscale_tensor(&img, TEXT_MODEL_HEIGHT, TEXT_MODEL_WIDTH)?;
 
         let output_data: Vec<f32> = tokio::task::spawn_blocking(move || {
-            let input_tensor = Tensor::from_array(tensor)
-                .map_err(|e| SolverError::InferenceFailed(format!("Tensor creation failed: {e}")))?;
-            let mut sess = session.lock().map_err(|e| {
-                SolverError::InferenceFailed(format!("Session lock poisoned: {e}"))
+            let input_tensor = Tensor::from_array(tensor).map_err(|e| {
+                SolverError::InferenceFailed(format!("Tensor creation failed: {e}"))
             })?;
+            let mut sess = session
+                .lock()
+                .map_err(|e| SolverError::InferenceFailed(format!("Session lock poisoned: {e}")))?;
             let outputs = sess
                 .run(ort::inputs!["input" => input_tensor])
                 .map_err(|e| SolverError::InferenceFailed(format!("Inference failed: {e}")))?;
-            let logits = outputs["output"]
-                .try_extract_array::<f32>()
-                .map_err(|e| SolverError::InferenceFailed(format!("Output extraction failed: {e}")))?;
+            let logits = outputs["output"].try_extract_array::<f32>().map_err(|e| {
+                SolverError::InferenceFailed(format!("Output extraction failed: {e}"))
+            })?;
             Ok::<Vec<f32>, SolverError>(logits.iter().copied().collect())
         })
         .await
@@ -146,7 +147,11 @@ impl Solver for TextOcrSolver {
 
         Ok(CaptchaResult {
             success: !text.is_empty(),
-            solution: if text.is_empty() { None } else { Some(CaptchaSolution::Text(text)) },
+            solution: if text.is_empty() {
+                None
+            } else {
+                Some(CaptchaSolution::Text(text))
+            },
             solver_used: self.name().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             error: None,
@@ -207,13 +212,21 @@ impl Solver for ImageClassifierSolver {
 
         let prompt = match captcha_type {
             CaptchaType::ImageSelection { prompt } => prompt.clone(),
-            _ => return Err(SolverError::Unsupported("Not an image selection captcha".into())),
+            _ => {
+                return Err(SolverError::Unsupported(
+                    "Not an image selection captcha".into(),
+                ))
+            }
         };
 
         let session = self.get_session().await?.clone();
         let img = preprocess::decode_image(image)?;
         let tiles = preprocess::split_into_tiles(
-            &img, GRID_ROWS, GRID_COLS, CLASSIFIER_INPUT_SIZE, CLASSIFIER_INPUT_SIZE,
+            &img,
+            GRID_ROWS,
+            GRID_COLS,
+            CLASSIFIER_INPUT_SIZE,
+            CLASSIFIER_INPUT_SIZE,
         )?;
 
         info!(prompt = %prompt, tiles = tiles.len(), "Classifying grid tiles");
@@ -250,7 +263,11 @@ impl Solver for ImageClassifierSolver {
         let success = !matching_coords.is_empty();
         Ok(CaptchaResult {
             success,
-            solution: if success { Some(CaptchaSolution::Coordinates(matching_coords)) } else { None },
+            solution: if success {
+                Some(CaptchaSolution::Coordinates(matching_coords))
+            } else {
+                None
+            },
             solver_used: self.name().to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
             error: None,
@@ -258,7 +275,10 @@ impl Solver for ImageClassifierSolver {
     }
 
     fn supports(&self, captcha_type: &CaptchaType) -> bool {
-        matches!(captcha_type, CaptchaType::ImageSelection { .. } | CaptchaType::RecaptchaV2)
+        matches!(
+            captcha_type,
+            CaptchaType::ImageSelection { .. } | CaptchaType::RecaptchaV2
+        )
     }
 
     fn name(&self) -> &str {

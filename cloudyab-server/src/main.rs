@@ -40,15 +40,13 @@ async fn main() -> Result<()> {
     }
 
     // Load configuration from file (or defaults)
-    let config = CloudyAbConfig::load()
-        .map_err(|e| anyhow::anyhow!("Configuration error: {e}"))?;
+    let config = CloudyAbConfig::load().map_err(|e| anyhow::anyhow!("Configuration error: {e}"))?;
 
     // Initialize structured logging to stderr (stdout is for MCP protocol)
     let log_level = config.engine.log_level.clone();
     fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&log_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_level)),
         )
         .with_target(false)
         .json()
@@ -74,7 +72,9 @@ async fn main() -> Result<()> {
         // Conditionally register the browser engine
         if config.browser.enabled {
             let browser_config = BrowserConfig {
-                binary_path: config.browser.binary_path
+                binary_path: config
+                    .browser
+                    .binary_path
                     .as_ref()
                     .map(PathBuf::from)
                     .unwrap_or_default(),
@@ -131,7 +131,10 @@ async fn main() -> Result<()> {
     // Start the HTTP task queue server in the background
     let orch_for_http = orchestrator.clone();
     let config_for_http = config.clone();
-    tokio::spawn(task_queue::start_http_server(orch_for_http, config_for_http));
+    tokio::spawn(task_queue::start_http_server(
+        orch_for_http,
+        config_for_http,
+    ));
 
     // Create the MCP server
     let server = CloudyAbServer::new(orchestrator, config);

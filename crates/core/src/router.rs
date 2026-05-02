@@ -36,7 +36,13 @@ impl LayerRouter {
     /// Check if a URL is known to require full browser rendering.
     fn requires_browser(&self, url: &str) -> bool {
         let browser_patterns = [
-            "login", "signin", "sign-in", "auth", "captcha", "challenge", "verify",
+            "login",
+            "signin",
+            "sign-in",
+            "auth",
+            "captcha",
+            "challenge",
+            "verify",
         ];
         let url_lower = url.to_lowercase();
         browser_patterns.iter().any(|p| url_lower.contains(p))

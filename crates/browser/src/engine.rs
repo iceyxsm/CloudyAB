@@ -14,7 +14,9 @@ use chromiumoxide::page::Page;
 use cloudyab_core::engine::{BrowsingEngine, EngineError};
 use cloudyab_types::cookie::{Cookie, CookieJar, SameSite};
 use cloudyab_types::fingerprint::FingerprintProfile;
-use cloudyab_types::page::{ElementRef, PageSnapshot, SnapshotOptions, CONTENT_ROLES, INTERACTIVE_ROLES};
+use cloudyab_types::page::{
+    ElementRef, PageSnapshot, SnapshotOptions, CONTENT_ROLES, INTERACTIVE_ROLES,
+};
 use cloudyab_types::session::{Layer, NavigationResult, SessionConfig};
 use futures::StreamExt;
 use tokio::sync::RwLock;
@@ -61,10 +63,9 @@ impl BrowserEngine {
             EngineError::BrowserError(format!("Failed to build browser config: {e}"))
         })?;
 
-        let (browser, mut handler) =
-            Browser::launch(browser_config).await.map_err(|e| {
-                EngineError::BrowserError(format!("Failed to launch browser: {e}"))
-            })?;
+        let (browser, mut handler) = Browser::launch(browser_config)
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Failed to launch browser: {e}")))?;
 
         // Spawn the CDP event handler in the background
         tokio::spawn(async move {
@@ -93,9 +94,11 @@ impl BrowserEngine {
 
     /// Create a new page with stealth scripts injected before any content loads.
     async fn create_stealth_page(&self, url: &str) -> Result<Arc<Page>, EngineError> {
-        let page = self.browser.new_page(url).await.map_err(|e| {
-            EngineError::Navigation(format!("Failed to create page: {e}"))
-        })?;
+        let page = self
+            .browser
+            .new_page(url)
+            .await
+            .map_err(|e| EngineError::Navigation(format!("Failed to create page: {e}")))?;
 
         // Inject stealth scripts via CDP's Page.addScriptToEvaluateOnNewDocument
         page.execute(
@@ -104,9 +107,7 @@ impl BrowserEngine {
             ),
         )
         .await
-        .map_err(|e| {
-            EngineError::BrowserError(format!("Failed to inject stealth script: {e}"))
-        })?;
+        .map_err(|e| EngineError::BrowserError(format!("Failed to inject stealth script: {e}")))?;
 
         Ok(Arc::new(page))
     }
@@ -130,9 +131,11 @@ impl BrowsingEngine for BrowserEngine {
         let page = self.create_stealth_page(&config.target_url).await?;
         self.wait_for_stable(&page).await?;
 
-        let final_url = page.url().await.map_err(|e| {
-            EngineError::Navigation(format!("Failed to get URL: {e}"))
-        })?.unwrap_or_else(|| config.target_url.clone());
+        let final_url = page
+            .url()
+            .await
+            .map_err(|e| EngineError::Navigation(format!("Failed to get URL: {e}")))?
+            .unwrap_or_else(|| config.target_url.clone());
 
         // Store as active page
         let mut guard = self.page.write().await;
@@ -157,15 +160,14 @@ impl BrowsingEngine for BrowserEngine {
             .into_value::<String>()
             .unwrap_or_default();
 
-        let url = page.url().await.map_err(|e| {
-            EngineError::BrowserError(format!("Failed to get URL: {e}"))
-        })?.unwrap_or_default();
+        let url = page
+            .url()
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Failed to get URL: {e}")))?
+            .unwrap_or_default();
 
         // Extract accessibility tree via JavaScript
-        let scope_selector = options
-            .selector
-            .as_deref()
-            .unwrap_or("document.body");
+        let scope_selector = options.selector.as_deref().unwrap_or("document.body");
 
         let js = build_snapshot_js(scope_selector, options);
         let raw: serde_json::Value = page
@@ -204,19 +206,19 @@ impl BrowsingEngine for BrowserEngine {
             .map_err(|e| EngineError::ElementNotFound(format!("{ref_id}: {e}")))?;
 
         // Clear existing value then type
-        element.click().await.map_err(|e| {
-            EngineError::BrowserError(format!("Focus failed: {e}"))
-        })?;
+        element
+            .click()
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Focus failed: {e}")))?;
 
-        page.evaluate(format!(
-            "document.querySelector('{selector}').value = ''"
-        ))
-        .await
-        .map_err(|e| EngineError::BrowserError(format!("Clear failed: {e}")))?;
+        page.evaluate(format!("document.querySelector('{selector}').value = ''"))
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Clear failed: {e}")))?;
 
-        element.type_str(text).await.map_err(|e| {
-            EngineError::BrowserError(format!("Type failed: {e}"))
-        })?;
+        element
+            .type_str(text)
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Type failed: {e}")))?;
 
         Ok(())
     }
@@ -231,26 +233,31 @@ impl BrowsingEngine for BrowserEngine {
             .await
             .map_err(|e| EngineError::ElementNotFound(format!("{ref_id}: {e}")))?;
 
-        element.click().await.map_err(|e| {
-            EngineError::BrowserError(format!("Focus failed: {e}"))
-        })?;
+        element
+            .click()
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Focus failed: {e}")))?;
 
-        element.type_str(text).await.map_err(|e| {
-            EngineError::BrowserError(format!("Type failed: {e}"))
-        })?;
+        element
+            .type_str(text)
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Type failed: {e}")))?;
 
         Ok(())
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>, EngineError> {
         let page = self.active_page().await?;
-        let bytes = page.screenshot(
-            chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder()
-                .format(chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png)
-                .build(),
-        )
-        .await
-        .map_err(|e| EngineError::ScreenshotFailed(format!("{e}")))?;
+        let bytes = page
+            .screenshot(
+                chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder()
+                    .format(
+                        chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png,
+                    )
+                    .build(),
+            )
+            .await
+            .map_err(|e| EngineError::ScreenshotFailed(format!("{e}")))?;
 
         Ok(bytes)
     }
@@ -258,9 +265,11 @@ impl BrowsingEngine for BrowserEngine {
     async fn get_cookies(&self) -> Result<CookieJar, EngineError> {
         let page = self.active_page().await?;
 
-        let url = page.url().await.map_err(|e| {
-            EngineError::CookieError(format!("Failed to get URL: {e}"))
-        })?.unwrap_or_default();
+        let url = page
+            .url()
+            .await
+            .map_err(|e| EngineError::CookieError(format!("Failed to get URL: {e}")))?
+            .unwrap_or_default();
 
         let cdp_cookies = page
             .execute(chromiumoxide::cdp::browser_protocol::network::GetCookiesParams::default())
@@ -311,7 +320,10 @@ impl BrowsingEngine for BrowserEngine {
                 .http_only(cookie.http_only)
                 .build()
                 .map_err(|e| {
-                    EngineError::CookieError(format!("Invalid cookie params for '{}': {e}", cookie.name))
+                    EngineError::CookieError(format!(
+                        "Invalid cookie params for '{}': {e}",
+                        cookie.name
+                    ))
                 })?;
 
             page.execute(params).await.map_err(|e| {
@@ -450,7 +462,8 @@ const root = '{scope_selector}' === 'document.body' ? document.body : document.q
 if (root) walk(root, 0);
 return {{refs, tree: lines.join('\\n')}};
 }})()"#,
-        interactive_roles = serde_json::to_string(INTERACTIVE_ROLES).unwrap_or_else(|_| "[]".into()),
+        interactive_roles =
+            serde_json::to_string(INTERACTIVE_ROLES).unwrap_or_else(|_| "[]".into()),
         content_roles = serde_json::to_string(CONTENT_ROLES).unwrap_or_else(|_| "[]".into()),
         interactive_only = interactive_only,
         compact = compact,
@@ -476,9 +489,21 @@ fn parse_snapshot_result(
     let mut refs = HashMap::new();
     if let Some(obj) = refs_raw {
         for (key, val) in obj {
-            let selector = val.get("selector").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let selector = val
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let role = val
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             refs.insert(
                 key.clone(),

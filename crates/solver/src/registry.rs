@@ -22,7 +22,11 @@ impl SolverRegistry {
 
     /// Register a new solver backend.
     pub fn register(&mut self, solver: Box<dyn Solver>) {
-        info!(solver = solver.name(), priority = solver.priority(), "Registered captcha solver");
+        info!(
+            solver = solver.name(),
+            priority = solver.priority(),
+            "Registered captcha solver"
+        );
         self.solvers.push(solver);
         // Keep sorted by priority
         self.solvers.sort_by_key(|s| s.priority());

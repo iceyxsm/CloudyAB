@@ -116,8 +116,13 @@ impl CloudyAbServer {
     }
 
     /// Navigate to a URL with stealth protection bypass.
-    #[tool(description = "Navigate to a URL. Automatically bypasses Cloudflare, AWS WAF, and other protections. Returns navigation result with status and protection bypass info.")]
-    async fn navigate(&self, params: Parameters<NavigateParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Navigate to a URL. Automatically bypasses Cloudflare, AWS WAF, and other protections. Returns navigation result with status and protection bypass info."
+    )]
+    async fn navigate(
+        &self,
+        params: Parameters<NavigateParams>,
+    ) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let preferred_layer = params.layer.as_deref().map(|l| match l {
             "http" | "stealth" => Layer::StealthHttp,
@@ -138,7 +143,10 @@ impl CloudyAbServer {
         };
 
         let orchestrator = self.orchestrator.read().await;
-        let result = orchestrator.navigate(&config).await.map_err(engine_to_mcp)?;
+        let result = orchestrator
+            .navigate(&config)
+            .await
+            .map_err(engine_to_mcp)?;
 
         let content = Content::json(&result)
             .map_err(|e| McpError::internal_error(format!("Serialization failed: {e}"), None))?;
@@ -146,8 +154,13 @@ impl CloudyAbServer {
     }
 
     /// Get the accessibility tree snapshot of the current page.
-    #[tool(description = "Get the current page's accessibility tree as a structured snapshot with element references (@eN). Use these refs with click, fill, and type tools.")]
-    async fn snapshot(&self, params: Parameters<SnapshotParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Get the current page's accessibility tree as a structured snapshot with element references (@eN). Use these refs with click, fill, and type tools."
+    )]
+    async fn snapshot(
+        &self,
+        params: Parameters<SnapshotParams>,
+    ) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let options = SnapshotOptions {
             interactive_only: params.interactive.unwrap_or(false),
@@ -157,7 +170,10 @@ impl CloudyAbServer {
         };
 
         let orchestrator = self.orchestrator.read().await;
-        let snapshot = orchestrator.snapshot(&options).await.map_err(engine_to_mcp)?;
+        let snapshot = orchestrator
+            .snapshot(&options)
+            .await
+            .map_err(engine_to_mcp)?;
 
         let mut text = format!("Page: {} ({})\n\n", snapshot.title, snapshot.url);
         text.push_str(&snapshot.tree);
@@ -166,11 +182,16 @@ impl CloudyAbServer {
     }
 
     /// Click an element by its reference ID.
-    #[tool(description = "Click an element on the page by its @eN reference from the snapshot. Automatically escalates to browser if needed.")]
+    #[tool(
+        description = "Click an element on the page by its @eN reference from the snapshot. Automatically escalates to browser if needed."
+    )]
     async fn click(&self, params: Parameters<ClickParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let orchestrator = self.orchestrator.read().await;
-        orchestrator.click(&params.r#ref).await.map_err(engine_to_mcp)?;
+        orchestrator
+            .click(&params.r#ref)
+            .await
+            .map_err(engine_to_mcp)?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Clicked element @{}",
@@ -179,7 +200,9 @@ impl CloudyAbServer {
     }
 
     /// Fill a text input by its reference ID.
-    #[tool(description = "Fill text into an input field by its @eN reference. Clears existing content first. Automatically escalates to browser if needed.")]
+    #[tool(
+        description = "Fill text into an input field by its @eN reference. Clears existing content first. Automatically escalates to browser if needed."
+    )]
     async fn fill(&self, params: Parameters<FillParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let orchestrator = self.orchestrator.read().await;
@@ -195,7 +218,9 @@ impl CloudyAbServer {
     }
 
     /// Type text with realistic keystroke timing.
-    #[tool(description = "Type text character-by-character with realistic human-like timing into an input field by its @eN reference.")]
+    #[tool(
+        description = "Type text character-by-character with realistic human-like timing into an input field by its @eN reference."
+    )]
     async fn type_text(&self, params: Parameters<TypeParams>) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let orchestrator = self.orchestrator.read().await;
@@ -211,7 +236,9 @@ impl CloudyAbServer {
     }
 
     /// Take a screenshot of the current page.
-    #[tool(description = "Take a PNG screenshot of the current page. Returns base64-encoded PNG data. Requires browser engine (auto-escalates from HTTP layer if needed).")]
+    #[tool(
+        description = "Take a PNG screenshot of the current page. Returns base64-encoded PNG data. Requires browser engine (auto-escalates from HTTP layer if needed)."
+    )]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let orchestrator = self.orchestrator.read().await;
         let png_bytes = orchestrator.screenshot().await.map_err(engine_to_mcp)?;
@@ -224,8 +251,13 @@ impl CloudyAbServer {
     }
 
     /// Get cookies from the current session.
-    #[tool(description = "Get all cookies from the current browsing session. Returns cookies as JSON with name, value, domain, path, and flags.")]
-    async fn get_cookies(&self, params: Parameters<GetCookiesParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Get all cookies from the current browsing session. Returns cookies as JSON with name, value, domain, path, and flags."
+    )]
+    async fn get_cookies(
+        &self,
+        params: Parameters<GetCookiesParams>,
+    ) -> Result<CallToolResult, McpError> {
         let params = params.0;
         let orchestrator = self.orchestrator.read().await;
         let jar = orchestrator.get_cookies().await.map_err(engine_to_mcp)?;
@@ -245,8 +277,13 @@ impl CloudyAbServer {
     }
 
     /// AI-powered autonomous browsing to accomplish a goal.
-    #[tool(description = "Use AI to autonomously browse the web and extract information. Provide a natural language goal and optionally a starting URL. The AI agent will navigate, click, fill forms, and extract data to accomplish the goal. Requires [ai] section configured in cloudyab.toml with an API key.")]
-    async fn ai_browse_tool(&self, params: Parameters<AiBrowseParams>) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Use AI to autonomously browse the web and extract information. Provide a natural language goal and optionally a starting URL. The AI agent will navigate, click, fill forms, and extract data to accomplish the goal. Requires [ai] section configured in cloudyab.toml with an API key."
+    )]
+    async fn ai_browse_tool(
+        &self,
+        params: Parameters<AiBrowseParams>,
+    ) -> Result<CallToolResult, McpError> {
         let params = params.0;
 
         if !self.config.ai.enabled {

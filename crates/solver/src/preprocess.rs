@@ -27,12 +27,8 @@ pub fn to_grayscale_tensor(
     height: u32,
     width: u32,
 ) -> Result<Array4<f32>, SolverError> {
-    let gray: GrayImage = image::imageops::resize(
-        &img.to_luma8(),
-        width,
-        height,
-        FilterType::Lanczos3,
-    );
+    let gray: GrayImage =
+        image::imageops::resize(&img.to_luma8(), width, height, FilterType::Lanczos3);
 
     let mut tensor = Array4::<f32>::zeros((1, 1, height as usize, width as usize));
     for y in 0..height as usize {
@@ -51,12 +47,8 @@ pub fn to_rgb_tensor(
     height: u32,
     width: u32,
 ) -> Result<Array4<f32>, SolverError> {
-    let rgb: RgbImage = image::imageops::resize(
-        &img.to_rgb8(),
-        width,
-        height,
-        FilterType::Lanczos3,
-    );
+    let rgb: RgbImage =
+        image::imageops::resize(&img.to_rgb8(), width, height, FilterType::Lanczos3);
 
     let mut tensor = Array4::<f32>::zeros((1, 3, height as usize, width as usize));
     for y in 0..height as usize {
@@ -80,21 +72,13 @@ pub fn split_into_tiles(
     tile_height: u32,
     tile_width: u32,
 ) -> Result<Vec<Array4<f32>>, SolverError> {
-    let resized = img.resize_exact(
-        cols * tile_width,
-        rows * tile_height,
-        FilterType::Lanczos3,
-    );
+    let resized = img.resize_exact(cols * tile_width, rows * tile_height, FilterType::Lanczos3);
 
     let mut tiles = Vec::with_capacity((rows * cols) as usize);
     for row in 0..rows {
         for col in 0..cols {
-            let tile = resized.crop_imm(
-                col * tile_width,
-                row * tile_height,
-                tile_width,
-                tile_height,
-            );
+            let tile =
+                resized.crop_imm(col * tile_width, row * tile_height, tile_width, tile_height);
             let tensor = to_rgb_tensor(&tile, tile_height, tile_width)?;
             tiles.push(tensor);
         }

@@ -45,7 +45,8 @@ impl KeyboardSimulator {
             .enumerate()
             .map(|(i, ch)| {
                 // Base delay with variance
-                let mut delay_ms = base_delay_ms * (1.0 + rng.gen_range(-self.variance..self.variance));
+                let mut delay_ms =
+                    base_delay_ms * (1.0 + rng.gen_range(-self.variance..self.variance));
 
                 // Longer pauses after spaces (word boundaries)
                 if i > 0 && text.chars().nth(i - 1) == Some(' ') {

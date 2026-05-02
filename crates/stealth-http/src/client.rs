@@ -144,12 +144,11 @@ impl StealthClient {
         form_params: &[(String, String)],
         answer: &str,
     ) -> Result<StealthResponse, StealthHttpError> {
-        let base = url::Url::parse(original_url).map_err(|e| {
-            StealthHttpError::ChallengeFailed(format!("Invalid URL: {e}"))
-        })?;
-        let submit_url = base.join(submit_path).map_err(|e| {
-            StealthHttpError::ChallengeFailed(format!("Invalid submit path: {e}"))
-        })?;
+        let base = url::Url::parse(original_url)
+            .map_err(|e| StealthHttpError::ChallengeFailed(format!("Invalid URL: {e}")))?;
+        let submit_url = base
+            .join(submit_path)
+            .map_err(|e| StealthHttpError::ChallengeFailed(format!("Invalid submit path: {e}")))?;
 
         let mut form = form_params.to_vec();
         form.push(("jschl_answer".into(), answer.into()));
@@ -160,9 +159,15 @@ impl StealthClient {
             .client
             .post(submit_url.as_str())
             .header("Referer", original_url)
-            .header("Origin", format!("{}://{}", base.scheme(), base.host_str().unwrap_or("")))
+            .header(
+                "Origin",
+                format!("{}://{}", base.scheme(), base.host_str().unwrap_or("")),
+            )
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            )
             .header("Accept-Language", &self.fingerprint.navigator.language)
             .header("Sec-Fetch-Dest", "document")
             .header("Sec-Fetch-Mode", "navigate")

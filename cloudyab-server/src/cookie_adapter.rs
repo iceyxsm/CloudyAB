@@ -22,9 +22,8 @@ impl CookieStoreAdapter {
             })?;
         }
 
-        let store = CookieStore::open(path).map_err(|e| {
-            EngineError::CookieError(format!("Failed to open cookie store: {e}"))
-        })?;
+        let store = CookieStore::open(path)
+            .map_err(|e| EngineError::CookieError(format!("Failed to open cookie store: {e}")))?;
 
         info!(path = %path.display(), "Cookie persistence store opened");
         Ok(Self {
@@ -35,20 +34,22 @@ impl CookieStoreAdapter {
 
 impl CookiePersistence for CookieStoreAdapter {
     fn persist(&self, jar: &CookieJar) -> Result<(), EngineError> {
-        let store = self.store.lock().map_err(|e| {
-            EngineError::CookieError(format!("Cookie store lock poisoned: {e}"))
-        })?;
-        store.store_jar(jar).map_err(|e| {
-            EngineError::CookieError(format!("Failed to persist cookies: {e}"))
-        })
+        let store = self
+            .store
+            .lock()
+            .map_err(|e| EngineError::CookieError(format!("Cookie store lock poisoned: {e}")))?;
+        store
+            .store_jar(jar)
+            .map_err(|e| EngineError::CookieError(format!("Failed to persist cookies: {e}")))
     }
 
     fn load_for_domain(&self, domain: &str) -> Result<Vec<Cookie>, EngineError> {
-        let store = self.store.lock().map_err(|e| {
-            EngineError::CookieError(format!("Cookie store lock poisoned: {e}"))
-        })?;
-        store.get_by_domain(domain).map_err(|e| {
-            EngineError::CookieError(format!("Failed to load cookies: {e}"))
-        })
+        let store = self
+            .store
+            .lock()
+            .map_err(|e| EngineError::CookieError(format!("Cookie store lock poisoned: {e}")))?;
+        store
+            .get_by_domain(domain)
+            .map_err(|e| EngineError::CookieError(format!("Failed to load cookies: {e}")))
     }
 }

@@ -27,10 +27,7 @@ impl ChallengeSolver {
     /// Attempt to solve a Cloudflare JS challenge from the page HTML.
     ///
     /// Returns the computed answer and the submission URL if successful.
-    pub fn solve_cf_challenge(
-        html: &str,
-        domain: &str,
-    ) -> Result<ChallengeAnswer, ChallengeError> {
+    pub fn solve_cf_challenge(html: &str, domain: &str) -> Result<ChallengeAnswer, ChallengeError> {
         // Extract the JS challenge code from the page
         let js_code = Self::extract_challenge_js(html)?;
 
@@ -53,10 +50,7 @@ impl ChallengeSolver {
     fn extract_challenge_js(html: &str) -> Result<String, ChallengeError> {
         // CF embeds the challenge in a <script> tag with specific patterns
         // Look for the challenge computation script
-        let start_markers = [
-            "setTimeout(function(){",
-            "var s,t,o,p,b,r,e,a,k,i,n,g,f,",
-        ];
+        let start_markers = ["setTimeout(function(){", "var s,t,o,p,b,r,e,a,k,i,n,g,f,"];
 
         for marker in &start_markers {
             if let Some(start) = html.find(marker) {
@@ -118,7 +112,9 @@ impl ChallengeSolver {
             if let Some(end) = rest.find('"') {
                 rest[..end].to_string()
             } else {
-                return Err(ChallengeError::ParseFailed("No form action end quote".into()));
+                return Err(ChallengeError::ParseFailed(
+                    "No form action end quote".into(),
+                ));
             }
         } else {
             return Err(ChallengeError::ParseFailed("No form action found".into()));

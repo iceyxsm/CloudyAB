@@ -81,7 +81,10 @@ impl BrowserConfig {
             "--metrics-recording-only".to_string(),
             "--mute-audio".to_string(),
             // Viewport
-            format!("--window-size={},{}", self.viewport_width, self.viewport_height),
+            format!(
+                "--window-size={},{}",
+                self.viewport_width, self.viewport_height
+            ),
         ];
 
         if self.disable_gpu {

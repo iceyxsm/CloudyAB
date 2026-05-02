@@ -68,10 +68,8 @@ pub fn load_random_profile(profiles_dir: &Path) -> FingerprintProfile {
 
 /// Load a fingerprint profile from a TOML file.
 fn load_from_file(path: &Path) -> Result<FingerprintProfile, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Read failed: {e}"))?;
-    toml::from_str(&content)
-        .map_err(|e| format!("Parse failed: {e}"))
+    let content = std::fs::read_to_string(path).map_err(|e| format!("Read failed: {e}"))?;
+    toml::from_str(&content).map_err(|e| format!("Parse failed: {e}"))
 }
 
 /// Built-in default: Chrome 125 on Windows 11.

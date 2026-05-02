@@ -52,16 +52,12 @@ impl MouseSimulator {
 
         // Generate random control points for cubic Bézier
         let cp1 = Point {
-            x: from.x + (to.x - from.x) * rng.gen_range(0.2..0.5)
-                + rng.gen_range(-50.0..50.0),
-            y: from.y + (to.y - from.y) * rng.gen_range(0.0..0.3)
-                + rng.gen_range(-50.0..50.0),
+            x: from.x + (to.x - from.x) * rng.gen_range(0.2..0.5) + rng.gen_range(-50.0..50.0),
+            y: from.y + (to.y - from.y) * rng.gen_range(0.0..0.3) + rng.gen_range(-50.0..50.0),
         };
         let cp2 = Point {
-            x: from.x + (to.x - from.x) * rng.gen_range(0.5..0.8)
-                + rng.gen_range(-30.0..30.0),
-            y: from.y + (to.y - from.y) * rng.gen_range(0.7..1.0)
-                + rng.gen_range(-30.0..30.0),
+            x: from.x + (to.x - from.x) * rng.gen_range(0.5..0.8) + rng.gen_range(-30.0..30.0),
+            y: from.y + (to.y - from.y) * rng.gen_range(0.7..1.0) + rng.gen_range(-30.0..30.0),
         };
 
         let mut steps = Vec::with_capacity(self.steps);

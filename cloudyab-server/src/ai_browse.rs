@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use cloudyab_core::config::AiConfig;
 use cloudyab_core::orchestrator::Orchestrator;
-use cloudyab_types::session::{Layer, SessionConfig};
 use cloudyab_types::page::SnapshotOptions;
+use cloudyab_types::session::{Layer, SessionConfig};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -60,8 +60,14 @@ pub async fn ai_browse(
     let client = Client::new();
     let mut urls_visited = Vec::new();
     let mut messages = vec![
-        ChatMessage { role: "system".into(), content: SYSTEM_PROMPT.into() },
-        ChatMessage { role: "user".into(), content: format!("Goal: {goal}") },
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_PROMPT.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: format!("Goal: {goal}"),
+        },
     ];
 
     // Navigate to start URL if provided
@@ -79,7 +85,10 @@ pub async fn ai_browse(
 
         let response = call_llm(&client, config, api_key, &messages).await?;
         debug!(step, response = %response, "LLM response");
-        messages.push(ChatMessage { role: "assistant".into(), content: response.clone() });
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: response.clone(),
+        });
 
         let action = parse_action(&response)?;
         match execute_action(orchestrator, action, &mut urls_visited, &mut messages).await? {
@@ -121,17 +130,17 @@ async fn execute_action(
         AgentAction::Click { ref_id } => {
             info!(ref_id = %ref_id, "AI clicking");
             let orch = orchestrator.read().await;
-            orch.click(&ref_id).await.map_err(|e| {
-                AiBrowseError::ActionFailed(format!("Click {ref_id} failed: {e}"))
-            })?;
+            orch.click(&ref_id)
+                .await
+                .map_err(|e| AiBrowseError::ActionFailed(format!("Click {ref_id} failed: {e}")))?;
             Ok(StepOutcome::Continue)
         }
         AgentAction::Fill { ref_id, text } => {
             info!(ref_id = %ref_id, "AI filling");
             let orch = orchestrator.read().await;
-            orch.fill(&ref_id, &text).await.map_err(|e| {
-                AiBrowseError::ActionFailed(format!("Fill {ref_id} failed: {e}"))
-            })?;
+            orch.fill(&ref_id, &text)
+                .await
+                .map_err(|e| AiBrowseError::ActionFailed(format!("Fill {ref_id} failed: {e}")))?;
             Ok(StepOutcome::Continue)
         }
         AgentAction::Navigate { url } => {
@@ -166,9 +175,9 @@ async fn navigate_to(
         timeout_secs: 30,
         preferred_layer: Some(Layer::Browser),
     };
-    orch.navigate(&nav_config).await.map_err(|e| {
-        AiBrowseError::Navigation(format!("Failed to navigate to {url}: {e}"))
-    })?;
+    orch.navigate(&nav_config)
+        .await
+        .map_err(|e| AiBrowseError::Navigation(format!("Failed to navigate to {url}: {e}")))?;
     Ok(())
 }
 
@@ -184,9 +193,10 @@ async fn get_snapshot_for_llm(
         selector: None,
     };
 
-    let snapshot = orch.snapshot(&options).await.map_err(|e| {
-        AiBrowseError::ActionFailed(format!("Snapshot failed: {e}"))
-    })?;
+    let snapshot = orch
+        .snapshot(&options)
+        .await
+        .map_err(|e| AiBrowseError::ActionFailed(format!("Snapshot failed: {e}")))?;
 
     let mut text = format!("URL: {}\nTitle: {}\n\n", snapshot.url, snapshot.title);
     let tree = if snapshot.tree.len() > MAX_SNAPSHOT_CHARS {
@@ -205,7 +215,10 @@ async fn call_llm(
     api_key: &str,
     messages: &[ChatMessage],
 ) -> Result<String, AiBrowseError> {
-    let base_url = config.api_base_url.as_deref().unwrap_or(resolve_base_url(&config.provider));
+    let base_url = config
+        .api_base_url
+        .as_deref()
+        .unwrap_or(resolve_base_url(&config.provider));
     let url = format!("{base_url}/chat/completions");
 
     let body = serde_json::json!({
@@ -227,12 +240,15 @@ async fn call_llm(
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
-        return Err(AiBrowseError::LlmApi(format!("API returned {status}: {text}")));
+        return Err(AiBrowseError::LlmApi(format!(
+            "API returned {status}: {text}"
+        )));
     }
 
-    let json: serde_json::Value = resp.json().await.map_err(|e| {
-        AiBrowseError::LlmApi(format!("Failed to parse response: {e}"))
-    })?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AiBrowseError::LlmApi(format!("Failed to parse response: {e}")))?;
 
     json["choices"][0]["message"]["content"]
         .as_str()
@@ -274,7 +290,9 @@ fn parse_action(response: &str) -> Result<AgentAction, AiBrowseError> {
         "extract" => Ok(AgentAction::Extract {
             data: val["data"].as_str().unwrap_or("").to_string(),
         }),
-        _ => Err(AiBrowseError::ParseFailed(format!("Unknown action: {action}"))),
+        _ => Err(AiBrowseError::ParseFailed(format!(
+            "Unknown action: {action}"
+        ))),
     }
 }
 

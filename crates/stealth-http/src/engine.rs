@@ -9,12 +9,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use cloudyab_core::engine::{BrowsingEngine, EngineError};
-use cloudyab_types::{
-    Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SnapshotOptions,
-};
 use cloudyab_types::fingerprint::FingerprintProfile;
 use cloudyab_types::page::ElementRef;
 use cloudyab_types::session::SessionConfig;
+use cloudyab_types::{Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SnapshotOptions};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
@@ -217,10 +215,7 @@ impl StealthEngine {
                     role: role.into(),
                     name: display_name,
                     nth: None,
-                    attributes: HashMap::from([
-                        ("type".into(), input_type),
-                        ("name".into(), name),
-                    ]),
+                    attributes: HashMap::from([("type".into(), input_type), ("name".into(), name)]),
                 },
             );
         }
