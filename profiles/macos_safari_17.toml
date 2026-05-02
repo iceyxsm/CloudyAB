@@ -1,0 +1,48 @@
+# CloudyAB Fingerprint Profile: Safari 17 on macOS Sonoma
+
+name = "macos_safari_17"
+
+[os]
+platform = "MacIntel"
+os_cpu = "Intel Mac OS X 10_15_7"
+architecture = "x86_64"
+
+[tls]
+cipher_suites = [
+    "TLS_AES_128_GCM_SHA256",
+    "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256",
+    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+]
+extensions = [
+    "server_name",
+    "supported_groups",
+    "key_share",
+    "supported_versions",
+    "psk_key_exchange_modes",
+]
+elliptic_curves = ["X25519", "P-256", "P-384", "P-521"]
+ec_point_formats = ["uncompressed"]
+
+[navigator]
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+platform = "MacIntel"
+language = "en-US"
+languages = ["en-US", "en"]
+hardware_concurrency = 10
+device_memory = 16
+vendor = "Apple Computer, Inc."
+max_touch_points = 0
+
+[screen]
+width = 2560
+height = 1440
+avail_width = 2560
+avail_height = 1415
+color_depth = 30
+pixel_ratio = 2.0
+
+[webgl]
+vendor = "Apple"
+renderer = "Apple M2 Pro"
