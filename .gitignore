@@ -1,0 +1,28 @@
+#kiro
+.kiro/
+.kiro
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Data
+data/
+models/*.onnx
+
+# Logs
+*.log

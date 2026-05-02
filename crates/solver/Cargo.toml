@@ -1,0 +1,24 @@
+[package]
+name = "cloudyab-solver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI-powered captcha solver using local ONNX models with pluggable backends"
+
+[dependencies]
+cloudyab-types.workspace = true
+cloudyab-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ort.workspace = true
+image.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+
+[features]
+default = ["local-solver"]
+local-solver = []
+cloud-solver = []

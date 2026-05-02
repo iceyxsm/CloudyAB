@@ -1,0 +1,14 @@
+[package]
+name = "cloudyab-snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Accessibility tree to JSON with @eN refs (agent-browser compatible)"
+
+[dependencies]
+cloudyab-types.workspace = true
+cloudyab-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

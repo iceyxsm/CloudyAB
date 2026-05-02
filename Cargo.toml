@@ -1,0 +1,73 @@
+[workspace]
+members = [
+    "crates/types",
+    "crates/core",
+    "crates/stealth-http",
+    "crates/browser",
+    "crates/solver",
+    "crates/cookies",
+    "crates/human",
+    "crates/snapshot",
+    "cloudyab-server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["CloudyAB Contributors"]
+repository = "https://github.com/cloudyab/cloudyab"
+
+[workspace.dependencies]
+# Internal crates
+cloudyab-types = { path = "crates/types" }
+cloudyab-core = { path = "crates/core" }
+cloudyab-stealth-http = { path = "crates/stealth-http" }
+cloudyab-browser = { path = "crates/browser" }
+cloudyab-solver = { path = "crates/solver" }
+cloudyab-cookies = { path = "crates/cookies" }
+cloudyab-human = { path = "crates/human" }
+cloudyab-snapshot = { path = "crates/snapshot" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# MCP protocol
+rmcp = { version = "0.1", features = ["server", "transport-io"] }
+
+# HTTP + TLS
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "gzip", "brotli"] }
+
+# Database (cookies)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# ONNX Runtime (captcha solver)
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+
+# Image processing
+image = "0.25"
+
+# JS interpreter (for CF challenges)
+boa_engine = "0.19"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+bytes = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+async-trait = "0.1"
+futures = "0.3"

@@ -1,0 +1,96 @@
+//! Core engine traits that each layer must implement.
+
+use async_trait::async_trait;
+use cloudyab_types::{
+    CaptchaResult, CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot,
+    SessionConfig, SnapshotOptions,
+};
+
+/// Trait for a browsing engine (HTTP stealth or full browser).
+#[async_trait]
+pub trait BrowsingEngine: Send + Sync {
+    /// Navigate to a URL and return the result.
+    async fn navigate(&self, config: &SessionConfig) -> Result<NavigationResult, EngineError>;
+
+    /// Get the current page's accessibility tree snapshot.
+    async fn snapshot(&self, options: &SnapshotOptions) -> Result<PageSnapshot, EngineError>;
+
+    /// Click an element by its @eN ref.
+    async fn click(&self, ref_id: &str) -> Result<(), EngineError>;
+
+    /// Fill a text input by its @eN ref.
+    async fn fill(&self, ref_id: &str, text: &str) -> Result<(), EngineError>;
+
+    /// Type text with realistic keystroke timing.
+    async fn type_text(&self, ref_id: &str, text: &str) -> Result<(), EngineError>;
+
+    /// Take a screenshot and return PNG bytes.
+    async fn screenshot(&self) -> Result<Vec<u8>, EngineError>;
+
+    /// Get all cookies from the current session.
+    async fn get_cookies(&self) -> Result<CookieJar, EngineError>;
+
+    /// Set cookies for the current session.
+    async fn set_cookies(&self, cookies: &[Cookie]) -> Result<(), EngineError>;
+
+    /// Get the current page URL.
+    async fn current_url(&self) -> Result<String, EngineError>;
+
+    /// Check if the engine can handle this URL without escalation.
+    async fn can_handle(&self, url: &str) -> bool;
+
+    /// Name of this engine for logging.
+    fn name(&self) -> &str;
+}
+
+/// Trait for captcha solving backends.
+#[async_trait]
+pub trait CaptchaSolver: Send + Sync {
+    /// Attempt to solve a captcha from a screenshot.
+    async fn solve(
+        &self,
+        image: &[u8],
+        captcha_type: &CaptchaType,
+        context: &str,
+    ) -> Result<CaptchaResult, EngineError>;
+
+    /// Check if this solver supports the given captcha type.
+    fn supports(&self, captcha_type: &CaptchaType) -> bool;
+
+    /// Name of this solver backend.
+    fn name(&self) -> &str;
+}
+
+/// Errors produced by engine operations.
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    #[error("Navigation failed: {0}")]
+    Navigation(String),
+
+    #[error("Element not found: ref={0}")]
+    ElementNotFound(String),
+
+    #[error("Timeout after {0}s")]
+    Timeout(u64),
+
+    #[error("Captcha detected but solver failed: {0}")]
+    CaptchaFailed(String),
+
+    #[error("Protection detected and could not be bypassed: {0}")]
+    ProtectionBlocked(String),
+
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Browser engine error: {0}")]
+    BrowserError(String),
+
+    #[error("Cookie operation failed: {0}")]
+    CookieError(String),
+
+    #[error("Screenshot failed: {0}")]
+    ScreenshotFailed(String),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+}

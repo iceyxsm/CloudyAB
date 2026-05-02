@@ -1,0 +1,13 @@
+[package]
+name = "cloudyab-human"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Human-like interaction simulation: Bézier mouse, realistic typing, scrolling"
+
+[dependencies]
+cloudyab-types.workspace = true
+cloudyab-core.workspace = true
+tokio.workspace = true
+rand.workspace = true
+tracing.workspace = true

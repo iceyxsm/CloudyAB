@@ -1,0 +1,12 @@
+[package]
+name = "cloudyab-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types and data structures for CloudyAB"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+chrono.workspace = true

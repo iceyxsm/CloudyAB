@@ -1,0 +1,27 @@
+[package]
+name = "cloudyab-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CloudyAB MCP server binary"
+
+[[bin]]
+name = "cloudyab"
+path = "src/main.rs"
+
+[dependencies]
+cloudyab-types.workspace = true
+cloudyab-core.workspace = true
+cloudyab-stealth-http.workspace = true
+cloudyab-browser.workspace = true
+cloudyab-solver.workspace = true
+cloudyab-cookies.workspace = true
+cloudyab-human.workspace = true
+cloudyab-snapshot.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rmcp.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
