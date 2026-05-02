@@ -61,6 +61,15 @@ pub trait CaptchaSolver: Send + Sync {
     fn name(&self) -> &str;
 }
 
+/// Trait for persistent cookie storage.
+pub trait CookiePersistence: Send + Sync {
+    /// Persist a cookie jar to storage.
+    fn persist(&self, jar: &CookieJar) -> Result<(), EngineError>;
+
+    /// Load cookies for a given domain from storage.
+    fn load_for_domain(&self, domain: &str) -> Result<Vec<Cookie>, EngineError>;
+}
+
 /// Errors produced by engine operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

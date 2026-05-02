@@ -14,7 +14,7 @@ use cloudyab_types::{
 use tracing::{info, warn};
 
 use crate::config::CloudyAbConfig;
-use crate::engine::{BrowsingEngine, CaptchaSolver, EngineError};
+use crate::engine::{BrowsingEngine, CaptchaSolver, CookiePersistence, EngineError};
 use crate::router::LayerRouter;
 
 /// Maximum number of captcha solve attempts per navigation.
@@ -26,6 +26,7 @@ pub struct Orchestrator {
     stealth_engine: Option<Arc<dyn BrowsingEngine>>,
     browser_engine: Option<Arc<dyn BrowsingEngine>>,
     solver: Option<Arc<dyn CaptchaSolver>>,
+    cookie_store: Option<Arc<dyn CookiePersistence>>,
     config: CloudyAbConfig,
     /// Which engine is currently active (last used)
     active_layer: tokio::sync::RwLock<Option<Layer>>,
@@ -44,6 +45,7 @@ impl Orchestrator {
             stealth_engine: None,
             browser_engine: None,
             solver: None,
+            cookie_store: None,
             config,
             active_layer: tokio::sync::RwLock::new(None),
         }
@@ -65,6 +67,12 @@ impl Orchestrator {
     pub fn set_solver(&mut self, solver: Arc<dyn CaptchaSolver>) {
         info!(solver = solver.name(), "Registered captcha solver");
         self.solver = Some(solver);
+    }
+
+    /// Register the cookie persistence store.
+    pub fn set_cookie_store(&mut self, store: Arc<dyn CookiePersistence>) {
+        info!("Registered cookie persistence store");
+        self.cookie_store = Some(store);
     }
 
     /// Navigate to a URL, handling layer routing and auto-escalation.
@@ -215,6 +223,9 @@ impl Orchestrator {
             }
         }
 
+        // Persist cookies if store is registered
+        self.persist_cookies_if_enabled().await;
+
         Ok(result)
     }
 
@@ -284,6 +295,30 @@ impl Orchestrator {
     async fn set_active_layer(&self, layer: Layer) {
         let mut active = self.active_layer.write().await;
         *active = Some(layer);
+    }
+
+    /// Persist cookies from the active engine to the cookie store (best-effort).
+    async fn persist_cookies_if_enabled(&self) {
+        let store = match &self.cookie_store {
+            Some(s) => s,
+            None => return,
+        };
+
+        let engine = match self.active_engine().await {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        match engine.get_cookies().await {
+            Ok(jar) => {
+                if let Err(e) = store.persist(&jar) {
+                    warn!(error = %e, "Failed to persist cookies");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to get cookies for persistence");
+            }
+        }
     }
 
     /// Detect if the current page contains a captcha by checking the snapshot.
