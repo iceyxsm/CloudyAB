@@ -42,7 +42,8 @@ thiserror = "2"
 anyhow = "1"
 
 # MCP protocol
-rmcp = { version = "0.1", features = ["server", "transport-io"] }
+rmcp = { version = "1.6", features = ["server", "transport-io", "macros"] }
+schemars = "1.0"
 
 # HTTP + TLS
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "gzip", "brotli"] }

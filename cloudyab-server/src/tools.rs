@@ -1,122 +1,235 @@
 //! MCP tool definitions for CloudyAB.
 //!
 //! Each tool corresponds to an action that AI agents can invoke via MCP.
+//! Tools are wired to the core `Orchestrator` which handles layer routing
+//! and auto-escalation.
 
+use std::sync::Arc;
+
+use cloudyab_core::engine::EngineError;
+use cloudyab_core::orchestrator::Orchestrator;
+use cloudyab_types::{Layer, SessionConfig, SnapshotOptions};
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
+use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+/// The CloudyAB MCP server that exposes browser automation tools.
+#[derive(Clone)]
+pub struct CloudyAbServer {
+    tool_router: ToolRouter<Self>,
+    orchestrator: Arc<RwLock<Orchestrator>>,
+}
 
 /// Input for the `navigate` tool.
-#[derive(Debug, Deserialize)]
-pub struct NavigateInput {
-    /// URL to navigate to
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct NavigateParams {
+    /// Target URL to navigate to
     pub url: String,
-    /// Preferred layer: "http" or "browser" (optional, auto-selects if omitted)
+    /// Preferred layer: "http" for stealth HTTP or "browser" for full browser. Omit for auto.
     pub layer: Option<String>,
-    /// Proxy URL (optional)
+    /// Proxy URL (http://, https://, socks5://)
     pub proxy: Option<String>,
-    /// Timeout in seconds (default: 30)
+    /// Timeout in seconds for page load (default: 30)
     pub timeout: Option<u64>,
 }
 
 /// Input for the `click` tool.
-#[derive(Debug, Deserialize)]
-pub struct ClickInput {
-    /// Element ref (e.g., "@e1", "@e5")
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ClickParams {
+    /// Element reference ID from the snapshot (e.g., "e1", "e5")
     pub r#ref: String,
 }
 
 /// Input for the `fill` tool.
-#[derive(Debug, Deserialize)]
-pub struct FillInput {
-    /// Element ref (e.g., "@e3")
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FillParams {
+    /// Element reference ID for the input field
     pub r#ref: String,
-    /// Text to fill
+    /// Text to fill into the input field
     pub text: String,
-    /// Whether to use realistic typing (default: true)
-    pub realistic: Option<bool>,
 }
 
 /// Input for the `type_text` tool.
-#[derive(Debug, Deserialize)]
-pub struct TypeInput {
-    /// Element ref
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct TypeParams {
+    /// Element reference ID for the input field
     pub r#ref: String,
-    /// Text to type character by character
+    /// Text to type with realistic keystroke timing
     pub text: String,
-    /// Words per minute (default: 40)
-    pub wpm: Option<u32>,
 }
 
 /// Input for the `snapshot` tool.
-#[derive(Debug, Deserialize)]
-pub struct SnapshotInput {
-    /// Only include interactive elements
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SnapshotParams {
+    /// Only include interactive elements (buttons, links, inputs)
     pub interactive: Option<bool>,
-    /// Remove empty structural elements
+    /// Remove empty structural elements for a compact tree
     pub compact: Option<bool>,
     /// Maximum tree depth (0 = unlimited)
     pub max_depth: Option<u32>,
-    /// CSS selector to scope the snapshot
+    /// CSS selector to scope the snapshot to a specific region
     pub selector: Option<String>,
 }
 
 /// Input for the `get_cookies` tool.
-#[derive(Debug, Deserialize)]
-pub struct GetCookiesInput {
-    /// Domain to filter cookies (optional, returns all if omitted)
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetCookiesParams {
+    /// Domain to filter cookies by (returns all if omitted)
     pub domain: Option<String>,
 }
 
-/// Input for the `set_cookies` tool.
-#[derive(Debug, Deserialize)]
-pub struct SetCookiesInput {
-    /// Cookies to set (JSON array)
-    pub cookies: Vec<CookieInput>,
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for CloudyAbServer {
+    fn get_info(&self) -> ServerInfo {
+        let mut info = ServerInfo::default();
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info
+    }
 }
 
-/// A single cookie to set.
-#[derive(Debug, Deserialize)]
-pub struct CookieInput {
-    pub name: String,
-    pub value: String,
-    pub domain: String,
-    pub path: Option<String>,
-    pub secure: Option<bool>,
-    pub http_only: Option<bool>,
+#[tool_router]
+impl CloudyAbServer {
+    /// Create a new CloudyAB MCP server.
+    pub fn new(orchestrator: Arc<RwLock<Orchestrator>>) -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+            orchestrator,
+        }
+    }
+
+    /// Navigate to a URL with stealth protection bypass.
+    #[tool(description = "Navigate to a URL. Automatically bypasses Cloudflare, AWS WAF, and other protections. Returns navigation result with status and protection bypass info.")]
+    async fn navigate(&self, params: Parameters<NavigateParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let preferred_layer = params.layer.as_deref().map(|l| match l {
+            "http" | "stealth" => Layer::StealthHttp,
+            _ => Layer::Browser,
+        });
+
+        let config = SessionConfig {
+            target_url: params.url,
+            fingerprint: None,
+            proxy: params.proxy.map(|url| cloudyab_types::ProxyConfig {
+                url,
+                username: None,
+                password: None,
+            }),
+            persist_cookies: true,
+            timeout_secs: params.timeout.unwrap_or(30),
+            preferred_layer,
+        };
+
+        let orchestrator = self.orchestrator.read().await;
+        let result = orchestrator.navigate(&config).await.map_err(engine_to_mcp)?;
+
+        let content = Content::json(&result)
+            .map_err(|e| McpError::internal_error(format!("Serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![content]))
+    }
+
+    /// Get the accessibility tree snapshot of the current page.
+    #[tool(description = "Get the current page's accessibility tree as a structured snapshot with element references (@eN). Use these refs with click, fill, and type tools.")]
+    async fn snapshot(&self, params: Parameters<SnapshotParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let options = SnapshotOptions {
+            interactive_only: params.interactive.unwrap_or(false),
+            compact: params.compact.unwrap_or(false),
+            max_depth: params.max_depth.unwrap_or(0),
+            selector: params.selector,
+        };
+
+        let orchestrator = self.orchestrator.read().await;
+        let snapshot = orchestrator.snapshot(&options).await.map_err(engine_to_mcp)?;
+
+        let mut text = format!("Page: {} ({})\n\n", snapshot.title, snapshot.url);
+        text.push_str(&snapshot.tree);
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Click an element by its reference ID.
+    #[tool(description = "Click an element on the page by its @eN reference from the snapshot. Automatically escalates to browser if needed.")]
+    async fn click(&self, params: Parameters<ClickParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let orchestrator = self.orchestrator.read().await;
+        orchestrator.click(&params.r#ref).await.map_err(engine_to_mcp)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Clicked element @{}",
+            params.r#ref
+        ))]))
+    }
+
+    /// Fill a text input by its reference ID.
+    #[tool(description = "Fill text into an input field by its @eN reference. Clears existing content first. Automatically escalates to browser if needed.")]
+    async fn fill(&self, params: Parameters<FillParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let orchestrator = self.orchestrator.read().await;
+        orchestrator
+            .fill(&params.r#ref, &params.text)
+            .await
+            .map_err(engine_to_mcp)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Filled @{} with text",
+            params.r#ref
+        ))]))
+    }
+
+    /// Type text with realistic keystroke timing.
+    #[tool(description = "Type text character-by-character with realistic human-like timing into an input field by its @eN reference.")]
+    async fn type_text(&self, params: Parameters<TypeParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let orchestrator = self.orchestrator.read().await;
+        orchestrator
+            .type_text(&params.r#ref, &params.text)
+            .await
+            .map_err(engine_to_mcp)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Typed into @{}",
+            params.r#ref
+        ))]))
+    }
+
+    /// Take a screenshot of the current page.
+    #[tool(description = "Take a PNG screenshot of the current page. Requires browser engine (auto-escalates from HTTP layer if needed).")]
+    async fn screenshot(&self) -> Result<CallToolResult, McpError> {
+        let orchestrator = self.orchestrator.read().await;
+        let _png_bytes = orchestrator.screenshot().await.map_err(engine_to_mcp)?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            "Screenshot captured (PNG)".to_string(),
+        )]))
+    }
+
+    /// Get cookies from the current session.
+    #[tool(description = "Get all cookies from the current browsing session. Returns cookies as JSON with name, value, domain, path, and flags.")]
+    async fn get_cookies(&self, params: Parameters<GetCookiesParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+        let orchestrator = self.orchestrator.read().await;
+        let jar = orchestrator.get_cookies().await.map_err(engine_to_mcp)?;
+
+        let cookies = if let Some(domain) = &params.domain {
+            jar.cookies
+                .into_iter()
+                .filter(|c| c.domain.contains(domain.as_str()))
+                .collect::<Vec<_>>()
+        } else {
+            jar.cookies
+        };
+
+        let content = Content::json(&cookies)
+            .map_err(|e| McpError::internal_error(format!("Serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![content]))
+    }
 }
 
-/// Input for the `solve_captcha` tool.
-#[derive(Debug, Deserialize)]
-pub struct SolveCaptchaInput {
-    /// Type of captcha (optional, auto-detects if omitted)
-    pub captcha_type: Option<String>,
-    /// Additional context/prompt for the solver
-    pub context: Option<String>,
-}
-
-/// Input for the `mouse_move` tool.
-#[derive(Debug, Deserialize)]
-pub struct MouseMoveInput {
-    /// Target X coordinate
-    pub x: f64,
-    /// Target Y coordinate
-    pub y: f64,
-}
-
-/// Input for the `scroll` tool.
-#[derive(Debug, Deserialize)]
-pub struct ScrollInput {
-    /// Direction: "up" or "down"
-    pub direction: String,
-    /// Pixels to scroll (default: 300)
-    pub pixels: Option<i32>,
-}
-
-/// Output format for tool results.
-#[derive(Debug, Serialize)]
-pub struct ToolOutput {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+/// Convert an EngineError into an MCP error response.
+fn engine_to_mcp(err: EngineError) -> McpError {
+    McpError::internal_error(err.to_string(), None)
 }
