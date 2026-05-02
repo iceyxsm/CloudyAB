@@ -46,6 +46,9 @@ anyhow = "1"
 rmcp = { version = "1.6", features = ["server", "transport-io", "macros"] }
 schemars = "1.0"
 
+# HTTP server (webhook/task queue)
+axum = "0.8"
+
 # HTTP + TLS
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "gzip", "brotli"] }
 

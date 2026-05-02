@@ -8,19 +8,24 @@
 use std::sync::Arc;
 
 use cloudyab_types::{
-    Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SessionConfig, SnapshotOptions,
+    CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SessionConfig,
+    SnapshotOptions,
 };
 use tracing::{info, warn};
 
 use crate::config::CloudyAbConfig;
-use crate::engine::{BrowsingEngine, EngineError};
+use crate::engine::{BrowsingEngine, CaptchaSolver, EngineError};
 use crate::router::LayerRouter;
+
+/// Maximum number of captcha solve attempts per navigation.
+const MAX_CAPTCHA_RETRIES: u32 = 3;
 
 /// The core orchestrator that manages engine lifecycle and request routing.
 pub struct Orchestrator {
     router: LayerRouter,
     stealth_engine: Option<Arc<dyn BrowsingEngine>>,
     browser_engine: Option<Arc<dyn BrowsingEngine>>,
+    solver: Option<Arc<dyn CaptchaSolver>>,
     config: CloudyAbConfig,
     /// Which engine is currently active (last used)
     active_layer: tokio::sync::RwLock<Option<Layer>>,
@@ -38,6 +43,7 @@ impl Orchestrator {
             router,
             stealth_engine: None,
             browser_engine: None,
+            solver: None,
             config,
             active_layer: tokio::sync::RwLock::new(None),
         }
@@ -53,6 +59,12 @@ impl Orchestrator {
     pub fn set_browser_engine(&mut self, engine: Arc<dyn BrowsingEngine>) {
         info!(engine = engine.name(), "Registered browser engine");
         self.browser_engine = Some(engine);
+    }
+
+    /// Register the captcha solver.
+    pub fn set_solver(&mut self, solver: Arc<dyn CaptchaSolver>) {
+        info!(solver = solver.name(), "Registered captcha solver");
+        self.solver = Some(solver);
     }
 
     /// Navigate to a URL, handling layer routing and auto-escalation.
@@ -181,8 +193,28 @@ impl Orchestrator {
         config: &SessionConfig,
     ) -> Result<NavigationResult, EngineError> {
         let browser = self.get_browser_engine()?;
-        let result = browser.navigate(config).await?;
+        let mut result = browser.navigate(config).await?;
         self.set_active_layer(Layer::Browser).await;
+
+        // Attempt auto-captcha solving if solver is registered
+        if let Some(ref solver) = self.solver {
+            if let Some(captcha_type) = self.detect_captcha().await {
+                info!(captcha = ?captcha_type, "Captcha detected, attempting auto-solve");
+                match self.solve_captcha(solver, &captcha_type).await {
+                    Ok(true) => {
+                        result.captcha_solved = true;
+                        info!("Captcha solved successfully");
+                    }
+                    Ok(false) => {
+                        warn!("Captcha solve returned unsuccessful");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Captcha solve failed");
+                    }
+                }
+            }
+        }
+
         Ok(result)
     }
 
@@ -253,4 +285,68 @@ impl Orchestrator {
         let mut active = self.active_layer.write().await;
         *active = Some(layer);
     }
+
+    /// Detect if the current page contains a captcha by checking the snapshot.
+    /// Returns the detected captcha type, or None if no captcha is present.
+    async fn detect_captcha(&self) -> Option<CaptchaType> {
+        let engine = self.active_engine().await.ok()?;
+        let options = SnapshotOptions {
+            interactive_only: false,
+            compact: true,
+            max_depth: 0,
+            selector: None,
+        };
+        let snapshot = engine.snapshot(&options).await.ok()?;
+        detect_captcha_in_snapshot(&snapshot.tree)
+    }
+
+    /// Attempt to solve a captcha: screenshot → solve → submit answer.
+    /// Returns Ok(true) if solved successfully, Ok(false) if solver returned failure.
+    async fn solve_captcha(
+        &self,
+        solver: &Arc<dyn CaptchaSolver>,
+        captcha_type: &CaptchaType,
+    ) -> Result<bool, EngineError> {
+        let engine = self.active_engine().await?;
+        let url = engine.current_url().await.unwrap_or_default();
+
+        for attempt in 0..MAX_CAPTCHA_RETRIES {
+            info!(attempt = attempt + 1, "Captcha solve attempt");
+            let screenshot = engine.screenshot().await?;
+            let result = solver.solve(&screenshot, captcha_type, &url).await?;
+
+            if result.success {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+}
+
+/// Detect captcha type from a page snapshot's accessibility tree text.
+/// Looks for known captcha indicators in element names and roles.
+fn detect_captcha_in_snapshot(tree: &str) -> Option<CaptchaType> {
+    let lower = tree.to_lowercase();
+
+    if lower.contains("cf-turnstile") || lower.contains("cloudflare") && lower.contains("challenge") {
+        return Some(CaptchaType::CloudflareTurnstile);
+    }
+    if lower.contains("h-captcha") || lower.contains("hcaptcha") {
+        return Some(CaptchaType::HCaptcha);
+    }
+    if lower.contains("recaptcha") || lower.contains("g-recaptcha") {
+        return Some(CaptchaType::RecaptchaV2);
+    }
+    if lower.contains("aws-waf") || lower.contains("awswaf") {
+        return Some(CaptchaType::AwsWafCaptcha);
+    }
+    if lower.contains("slider") && lower.contains("puzzle") {
+        return Some(CaptchaType::SliderPuzzle);
+    }
+    if lower.contains("captcha") && lower.contains("type the") {
+        return Some(CaptchaType::TextRecognition);
+    }
+
+    None
 }

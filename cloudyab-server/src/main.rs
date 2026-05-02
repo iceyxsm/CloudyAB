@@ -24,6 +24,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 mod tools;
 mod ai_browse;
+mod task_queue;
 
 use tools::CloudyAbServer;
 
@@ -102,6 +103,11 @@ async fn main() -> Result<()> {
     // Wrap orchestrator for shared access
     let orchestrator = Arc::new(RwLock::new(orchestrator));
     let config = Arc::new(config);
+
+    // Start the HTTP task queue server in the background
+    let orch_for_http = orchestrator.clone();
+    let config_for_http = config.clone();
+    tokio::spawn(task_queue::start_http_server(orch_for_http, config_for_http));
 
     // Create the MCP server
     let server = CloudyAbServer::new(orchestrator, config);
