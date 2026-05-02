@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 /// Load a fingerprint profile by name from the profiles directory.
 /// Falls back to the built-in default if the file doesn't exist.
+#[allow(dead_code)]
 pub fn load_profile(profiles_dir: &Path, name: &str) -> FingerprintProfile {
     let file_path = profiles_dir.join(format!("{name}.toml"));
 

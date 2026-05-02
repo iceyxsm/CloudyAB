@@ -49,7 +49,6 @@ pub struct StealthEngine {
 /// Internal state of the last navigated page.
 struct PageState {
     url: String,
-    status: u16,
     body: String,
     headers: reqwest::header::HeaderMap,
 }
@@ -264,7 +263,6 @@ impl BrowsingEngine for StealthEngine {
             let mut page = self.current_page.write().await;
             *page = Some(PageState {
                 url: config.target_url.clone(),
-                status: response.status,
                 body: response.body,
                 headers: response.headers,
             });
