@@ -64,6 +64,9 @@ boa_engine = "0.19"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# Browser automation (CDP)
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+
 # Utilities
 bytes = "1"
 url = "2"

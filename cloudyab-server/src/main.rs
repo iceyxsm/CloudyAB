@@ -7,6 +7,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use cloudyab_browser::config::BrowserConfig;
+use cloudyab_browser::engine::BrowserEngine;
 use cloudyab_core::config::CloudyAbConfig;
 use cloudyab_core::orchestrator::Orchestrator;
 use cloudyab_stealth_http::engine::StealthEngine;
@@ -43,12 +45,21 @@ async fn main() -> Result<()> {
 
     // Create and register the stealth-HTTP engine with a default fingerprint
     let fingerprint = default_fingerprint();
-    let stealth_engine = StealthEngine::new(fingerprint)
+    let stealth_engine = StealthEngine::new(fingerprint.clone())
         .map_err(|e| anyhow::anyhow!("Failed to create stealth engine: {e}"))?;
     orchestrator.set_stealth_engine(Arc::new(stealth_engine));
 
-    // Browser engine will be registered when Obscura integration is ready
-    tracing::info!("Stealth-HTTP engine registered (browser engine pending)");
+    // Launch the browser engine (requires Obscura/stealth binary in PATH or CLOUDYAB_BROWSER_BIN)
+    let browser_config = BrowserConfig::default();
+    match BrowserEngine::launch(browser_config, &fingerprint).await {
+        Ok(browser_engine) => {
+            orchestrator.set_browser_engine(Arc::new(browser_engine));
+            tracing::info!("Browser engine registered (Obscura)");
+        }
+        Err(e) => {
+            tracing::warn!("Browser engine unavailable, running HTTP-only mode: {e}");
+        }
+    }
 
     // Wrap orchestrator for shared access
     let orchestrator = Arc::new(RwLock::new(orchestrator));

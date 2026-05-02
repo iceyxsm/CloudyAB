@@ -16,3 +16,5 @@ tracing.workspace = true
 url.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+chromiumoxide.workspace = true
+chrono.workspace = true
