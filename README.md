@@ -19,25 +19,25 @@ Built in Rust for performance and low memory footprint (200-500MB RAM).
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   MCP Server (stdio)                 │
+│                   MCP Server (stdio)                │
 ├─────────────────────────────────────────────────────┤
-│              Unified Cookie Store (SQLite)           │
+│              Unified Cookie Store (SQLite)          │
 ├─────────────────────────────────────────────────────┤
 │                                                     │
 │  Layer 1: HTTP Stealth     (cloudscraper approach)  │
-│  ├─ TLS fingerprint spoofing (JA3/JA4)             │
-│  ├─ JS challenge solver (boa engine)               │
-│  └─ Handles basic CF/AWS WAF without browser       │
+│  ├─ TLS fingerprint spoofing (JA3/JA4)              │
+│  ├─ JS challenge solver (boa engine)                │
+│  └─ Handles basic CF/AWS WAF without browser        │
 │                                                     │
 │  Layer 2: Full Browser     (nodriver approach)      │
-│  ├─ Obscura engine (no Chrome dependency)          │
-│  ├─ Direct protocol, no webdriver binary           │
-│  ├─ Bézier mouse + realistic typing               │
-│  └─ Accessibility tree → JSON snapshot output      │
+│  ├─ Obscura engine (no Chrome dependency)           │
+│  ├─ Direct protocol, no webdriver binary            │
+│  ├─ Bézier mouse + realistic typing                 │
+│  └─ Accessibility tree → JSON snapshot output       │
 │                                                     │
-│  Layer 3: Captcha Solver   (pluggable)             │
-│  ├─ Local ONNX models (text, image, slider)        │
-│  └─ Cloud API fallback (OpenAI, Gemini, etc.)      │
+│  Layer 3: Captcha Solver   (pluggable)              │
+│  ├─ Local ONNX models (text, image, slider)         │
+│  └─ Cloud API fallback (OpenAI, Gemini, etc.)       │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```
