@@ -1,66 +1,19 @@
 # CloudyAB
 
-<p align="center">
-  <img src=".github/res/Cloudy.png" alt="CloudyAB" />
-</p>
+Stealth headless browser with MCP support and AI captcha solving.
 
-Stealth headless browser with MCP support and AI-powered captcha solving.
-
-Built in Rust for performance and low memory footprint (200-500MB RAM).
+CloudyAB bypasses Cloudflare, AWS WAF, and other anti-bot protections using a multi-layer architecture: fast HTTP-level stealth for simple pages, automatic escalation to a full browser engine for JavaScript-heavy sites, and AI-powered captcha solving when challenges are detected.
 
 ## Features
 
-- **Multi-layer stealth**: HTTP-level TLS fingerprinting (Layer 1) + full browser engine (Layer 2)
-- **No Chrome dependency**: Uses Obscura engine — standalone, undetectable
-- **AI captcha solving**: Local ONNX models for text OCR, image classification, slider puzzles
-- **MCP server**: Full Model Context Protocol interface for AI agent integration
-- **Agent-friendly output**: JSON accessibility tree with `@eN` refs (agent-browser compatible)
-- **Cookie persistence**: SQLite store with import/export
-- **Human-like interaction**: Bézier mouse curves, realistic typing, natural scrolling
-- **Cloudflare/AWS WAF bypass**: TLS fingerprint spoofing + JS challenge solver
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   MCP Server (stdio)                │
-├─────────────────────────────────────────────────────┤
-│              Unified Cookie Store (SQLite)          │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  Layer 1: HTTP Stealth     (cloudscraper approach)  │
-│  ├─ TLS fingerprint spoofing (JA3/JA4)              │
-│  ├─ JS challenge solver (boa engine)                │
-│  └─ Handles basic CF/AWS WAF without browser        │
-│                                                     │
-│  Layer 2: Full Browser     (nodriver approach)      │
-│  ├─ Obscura engine (no Chrome dependency)           │
-│  ├─ Direct protocol, no webdriver binary            │
-│  ├─ Bézier mouse + realistic typing                 │
-│  └─ Accessibility tree → JSON snapshot output       │
-│                                                     │
-│  Layer 3: Captcha Solver   (pluggable)              │
-│  ├─ Local ONNX models (text, image, slider)         │
-│  └─ Cloud API fallback (OpenAI, Gemini, etc.)       │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
-
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `navigate` | Go to URL (auto-selects layer) |
-| `click` | Click element by `@eN` ref |
-| `fill` | Fill input by ref |
-| `type_text` | Type with realistic keystroke timing |
-| `snapshot` | Get accessibility tree JSON |
-| `get_cookies` | Extract cookies (by domain or all) |
-| `set_cookies` | Set cookies for session |
-| `screenshot` | Capture page as PNG |
-| `solve_captcha` | Trigger AI captcha solver |
-| `mouse_move` | Move mouse with Bézier curve |
-| `scroll` | Scroll with natural pattern |
+- **Stealth HTTP layer** — TLS fingerprint spoofing (JA3/JA4), Cloudflare JS challenge solving via embedded JS interpreter
+- **Browser engine** — CDP-based headless browser with anti-detection script injection (navigator, WebGL, canvas, plugins spoofing)
+- **Auto-escalation** — starts with fast HTTP, automatically escalates to browser when protection requires it
+- **AI captcha solving** — local ONNX models for text OCR, image classification, and slider puzzles
+- **AI browsing agent** — give it a natural language goal, it navigates autonomously using an LLM
+- **MCP server** — 8 tools exposed via Model Context Protocol for AI agent integration
+- **HTTP task queue** — async API with webhook callbacks for long-running operations
+- **Fully configurable** — TOML config file, enable/disable any subsystem, set API keys
 
 ## Quick Start
 
@@ -68,53 +21,121 @@ Built in Rust for performance and low memory footprint (200-500MB RAM).
 # Build
 cargo build --release
 
-# Run MCP server
+# Generate default config
+./target/release/cloudyab --init
+
+# Edit config (set API keys, enable/disable features)
+# Then run the MCP server:
 ./target/release/cloudyab
 ```
 
-## MCP Configuration
+## Configuration
 
-Add to your MCP client config:
+CloudyAB loads configuration from `cloudyab.toml` (or path in `CLOUDYAB_CONFIG` env var). See `cloudyab.example.toml` for all options.
 
-```json
-{
-  "mcpServers": {
-    "cloudyab": {
-      "command": "./target/release/cloudyab",
-      "args": []
-    }
-  }
-}
+Key sections:
+
+```toml
+[engine]
+auto_escalate = true    # HTTP → browser on failure
+timeout_secs = 30
+
+[stealth_http]
+enabled = true
+
+[browser]
+enabled = true
+# binary_path = "/path/to/obscura"  # Or set CLOUDYAB_BROWSER_BIN
+
+[solver]
+enabled = true
+models_dir = "models"
+
+[ai]
+enabled = true
+provider = "openai"
+api_key = "sk-..."
+model = "gpt-4o-mini"
+
+[proxy]
+url = "socks5://127.0.0.1:1080"
 ```
 
-## Project Structure
+## MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `navigate` | Navigate to a URL with stealth protection bypass |
+| `snapshot` | Get page accessibility tree with @eN element refs |
+| `click` | Click an element by ref |
+| `fill` | Fill a text input by ref |
+| `type_text` | Type with realistic keystroke timing |
+| `screenshot` | Capture page as PNG |
+| `get_cookies` | Extract session cookies |
+| `ai_browse` | Autonomous AI-powered browsing for a goal |
+
+## HTTP Task Queue API
+
+Runs on port 9222 alongside the MCP server.
+
+```bash
+# Submit a task (returns immediately with task_id)
+curl -X POST http://localhost:9222/tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com",
+    "snapshot": true,
+    "cookies": true,
+    "webhook_url": "https://your-server.com/callback"
+  }'
+
+# Poll task status
+curl http://localhost:9222/tasks/<task_id>
+
+# Health check
+curl http://localhost:9222/health
+```
+
+## Architecture
 
 ```
-cloudyab/
-├── Cargo.toml                    # Workspace root
-├── crates/
-│   ├── types/                    # Shared types (zero logic)
-│   ├── core/                     # Orchestration, routing, traits
-│   ├── stealth-http/             # TLS fingerprinting, CF solver
-│   ├── browser/                  # Obscura engine wrapper
-│   ├── solver/                   # ONNX captcha AI (pluggable)
-│   ├── cookies/                  # SQLite cookie store
-│   ├── human/                    # Bézier mouse, typing, scroll
-│   └── snapshot/                 # Accessibility tree → JSON
-├── cloudyab-server/              # MCP server binary
-└── models/                       # ONNX models (downloaded on first run)
+┌─────────────────────────────────────────────────┐
+│              MCP Server (stdio)                  │
+│              HTTP Task Queue (:9222)             │
+├─────────────────────────────────────────────────┤
+│              Orchestrator (core)                 │
+│         auto-escalation + captcha detect        │
+├──────────────────┬──────────────────────────────┤
+│  Stealth HTTP    │    Browser Engine (CDP)      │
+│  (Layer 1)       │    (Layer 2)                 │
+│  TLS spoofing    │    Stealth scripts           │
+│  JS challenges   │    Full rendering            │
+├──────────────────┴──────────────────────────────┤
+│  Captcha Solver  │  Cookie Store  │  Human Sim  │
+│  ONNX models     │  SQLite        │  Bézier     │
+└──────────────────┴──────────────────────────────┘
 ```
 
-## RAM Budget
+## Crate Structure
 
-| Component | RAM |
-|-----------|-----|
-| Browser engine (Obscura) | ~30 MB |
-| HTTP stealth layer | ~20 MB |
-| ONNX Runtime + models | ~100-160 MB |
-| SQLite + cookies | ~5 MB |
-| Page DOM + tree | ~20-50 MB |
-| **Total** | **~225-265 MB** |
+| Crate | Purpose |
+|-------|---------|
+| `cloudyab-types` | Shared types, DTOs, enums (zero deps) |
+| `cloudyab-core` | Orchestration, routing, config, traits |
+| `cloudyab-stealth-http` | TLS fingerprinting + JS challenge solver |
+| `cloudyab-browser` | CDP browser engine with stealth injection |
+| `cloudyab-solver` | ONNX captcha AI (text, image, slider) |
+| `cloudyab-cookies` | SQLite cookie persistence |
+| `cloudyab-human` | Bézier mouse, realistic keyboard, scroll |
+| `cloudyab-snapshot` | Accessibility tree → JSON with @eN refs |
+| `cloudyab-server` | MCP binary that wires everything together |
+
+## Requirements
+
+- Rust 1.75+
+- A CDP-compatible browser binary for full browser mode (set `browser.binary_path` or `CLOUDYAB_BROWSER_BIN`)
+- ONNX model files in `models/` directory for captcha solving (optional)
+- OpenAI API key for AI browsing (optional)
 
 ## License
 

@@ -25,6 +25,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 mod tools;
 mod ai_browse;
 mod task_queue;
+mod solver_adapter;
 
 use tools::CloudyAbServer;
 
@@ -98,6 +99,15 @@ async fn main() -> Result<()> {
         }
     } else {
         tracing::info!("Stealth-HTTP engine disabled by config");
+    }
+
+    // Conditionally register the captcha solver
+    if config.solver.enabled {
+        let adapter = solver_adapter::SolverRegistryAdapter::new(&config.solver.models_dir);
+        orchestrator.set_solver(Arc::new(adapter));
+        tracing::info!("Captcha solver registered");
+    } else {
+        tracing::info!("Captcha solver disabled by config");
     }
 
     // Wrap orchestrator for shared access

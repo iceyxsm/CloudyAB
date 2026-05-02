@@ -30,3 +30,4 @@ reqwest.workspace = true
 thiserror.workspace = true
 axum.workspace = true
 uuid.workspace = true
+async-trait.workspace = true
