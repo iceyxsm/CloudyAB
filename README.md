@@ -1,5 +1,9 @@
 # CloudyAB
 
+<p align="center">
+  <img src=".github/res/Cloudy.png" alt="CloudyAB" />
+</p>
+
 Stealth headless browser with MCP support and AI captcha solving.
 
 CloudyAB bypasses Cloudflare, AWS WAF, and other anti-bot protections using a multi-layer architecture: fast HTTP-level stealth for simple pages, automatic escalation to a full browser engine for JavaScript-heavy sites, and AI-powered captcha solving when challenges are detected.
