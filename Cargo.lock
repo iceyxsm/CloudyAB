@@ -679,6 +679,7 @@ name = "cloudyab-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "cloudyab-browser",
  "cloudyab-cookies",
