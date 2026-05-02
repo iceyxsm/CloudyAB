@@ -29,6 +29,9 @@ const DEFAULT_AI_MODEL: &str = "gpt-4o-mini";
 /// Default max AI browsing steps.
 const DEFAULT_AI_MAX_STEPS: u32 = 20;
 
+/// Default HTTP API port for the task queue.
+const DEFAULT_HTTP_PORT: u16 = 9222;
+
 /// Top-level configuration for the CloudyAB engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -61,6 +64,8 @@ pub struct EngineConfig {
     pub max_ram_mb: u32,
     /// Log level (trace, debug, info, warn, error).
     pub log_level: String,
+    /// HTTP API port for the task queue (0 = disabled).
+    pub http_port: u16,
 }
 
 /// Stealth-HTTP layer configuration.
@@ -166,6 +171,7 @@ impl Default for EngineConfig {
             auto_escalate: true,
             max_ram_mb: DEFAULT_MAX_RAM_MB,
             log_level: "info".to_string(),
+            http_port: DEFAULT_HTTP_PORT,
         }
     }
 }

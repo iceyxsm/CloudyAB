@@ -681,6 +681,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64",
  "cloudyab-browser",
  "cloudyab-cookies",
  "cloudyab-core",

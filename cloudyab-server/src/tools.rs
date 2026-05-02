@@ -211,14 +211,16 @@ impl CloudyAbServer {
     }
 
     /// Take a screenshot of the current page.
-    #[tool(description = "Take a PNG screenshot of the current page. Requires browser engine (auto-escalates from HTTP layer if needed).")]
+    #[tool(description = "Take a PNG screenshot of the current page. Returns base64-encoded PNG data. Requires browser engine (auto-escalates from HTTP layer if needed).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let orchestrator = self.orchestrator.read().await;
-        let _png_bytes = orchestrator.screenshot().await.map_err(engine_to_mcp)?;
+        let png_bytes = orchestrator.screenshot().await.map_err(engine_to_mcp)?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            "Screenshot captured (PNG)".to_string(),
-        )]))
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        let data_uri = format!("data:image/png;base64,{b64}");
+
+        Ok(CallToolResult::success(vec![Content::text(data_uri)]))
     }
 
     /// Get cookies from the current session.

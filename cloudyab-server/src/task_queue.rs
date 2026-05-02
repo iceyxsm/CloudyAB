@@ -20,9 +20,6 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Default HTTP port for the task queue API.
-const DEFAULT_HTTP_PORT: u16 = 9222;
-
 /// Task status values.
 const STATUS_PENDING: &str = "pending";
 const STATUS_RUNNING: &str = "running";
@@ -105,8 +102,14 @@ pub async fn start_http_server(
     orchestrator: Arc<RwLock<Orchestrator>>,
     config: Arc<CloudyAbConfig>,
 ) {
+    let port = config.engine.http_port;
+    if port == 0 {
+        info!("HTTP task queue disabled (port = 0)");
+        return;
+    }
+
     let router = build_router(orchestrator, config);
-    let addr = format!("0.0.0.0:{DEFAULT_HTTP_PORT}");
+    let addr = format!("0.0.0.0:{port}");
     info!(addr = %addr, "Starting HTTP task queue server");
 
     let listener = match tokio::net::TcpListener::bind(&addr).await {
