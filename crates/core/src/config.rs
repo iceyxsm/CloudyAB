@@ -33,7 +33,7 @@ const DEFAULT_AI_MAX_STEPS: u32 = 20;
 const DEFAULT_HTTP_PORT: u16 = 9222;
 
 /// Top-level configuration for the CloudyAB engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CloudyAbConfig {
     /// General engine settings.
@@ -149,20 +149,6 @@ pub struct AiConfig {
 }
 
 // ─── Defaults ───────────────────────────────────────────────────────────
-
-impl Default for CloudyAbConfig {
-    fn default() -> Self {
-        Self {
-            engine: EngineConfig::default(),
-            stealth_http: StealthHttpConfig::default(),
-            browser: BrowserLayerConfig::default(),
-            solver: SolverConfig::default(),
-            cookies: CookieConfig::default(),
-            proxy: None,
-            ai: AiConfig::default(),
-        }
-    }
-}
 
 impl Default for EngineConfig {
     fn default() -> Self {

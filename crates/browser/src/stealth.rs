@@ -7,21 +7,22 @@ use cloudyab_types::fingerprint::FingerprintProfile;
 
 /// Generate the full stealth injection script for a given fingerprint profile.
 pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
-    let mut parts = Vec::with_capacity(8);
-    parts.push(navigator_spoof(&profile.navigator.user_agent, &profile.navigator));
-    parts.push(webdriver_hide());
-    parts.push(chrome_runtime_spoof());
-    parts.push(permissions_spoof());
-    parts.push(plugins_spoof());
-    parts.push(webgl_spoof(&profile.webgl.vendor, &profile.webgl.renderer));
-    parts.push(canvas_noise());
-    parts.push(screen_spoof(
-        profile.screen.width,
-        profile.screen.height,
-        profile.screen.color_depth,
-        profile.screen.pixel_ratio,
-    ));
-    parts.join("\n")
+    [
+        navigator_spoof(&profile.navigator.user_agent, &profile.navigator),
+        webdriver_hide(),
+        chrome_runtime_spoof(),
+        permissions_spoof(),
+        plugins_spoof(),
+        webgl_spoof(&profile.webgl.vendor, &profile.webgl.renderer),
+        canvas_noise(),
+        screen_spoof(
+            profile.screen.width,
+            profile.screen.height,
+            profile.screen.color_depth,
+            profile.screen.pixel_ratio,
+        ),
+    ]
+    .join("\n")
 }
 
 fn navigator_spoof(
