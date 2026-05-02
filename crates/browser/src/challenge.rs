@@ -247,14 +247,14 @@ pub fn parse_detection_results(raw_json: &serde_json::Value) -> Vec<ChallengeDet
 
     let mut detections: Vec<ChallengeDetection> = raw_detections
         .into_iter()
-        .filter_map(|raw| {
+        .map(|raw| {
             let captcha_type = map_captcha_type(&raw.captcha_type);
-            Some(ChallengeDetection {
+            ChallengeDetection {
                 captcha_type,
                 confidence: raw.confidence,
                 container_selector: raw.container,
                 is_interstitial: raw.is_interstitial,
-            })
+            }
         })
         .collect();
 
