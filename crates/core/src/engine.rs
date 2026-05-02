@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use cloudyab_types::{
-    CaptchaResult, CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot,
+    CaptchaResult, CaptchaType, Cookie, CookieJar, NavigationResult, PageSnapshot,
     SessionConfig, SnapshotOptions,
 };
 

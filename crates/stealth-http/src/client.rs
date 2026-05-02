@@ -104,6 +104,87 @@ impl StealthClient {
     }
 }
 
+impl StealthClient {
+    /// Make a GET request that does NOT check for challenges (used during challenge flow).
+    pub async fn get_raw(&self, url: &str) -> Result<StealthResponse, StealthHttpError> {
+        let response = self
+            .client
+            .get(url)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+            .header("Accept-Language", &self.fingerprint.navigator.language)
+            .header("Accept-Encoding", "gzip, deflate, br")
+            .header("Cache-Control", "max-age=0")
+            .header("Sec-Ch-Ua-Mobile", "?0")
+            .header("Sec-Ch-Ua-Platform", format!("\"{}\"", self.fingerprint.os.platform))
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "none")
+            .header("Sec-Fetch-User", "?1")
+            .header("Upgrade-Insecure-Requests", "1")
+            .send()
+            .await
+            .map_err(StealthHttpError::Request)?;
+
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = response.text().await.map_err(StealthHttpError::Request)?;
+
+        Ok(StealthResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    /// Submit a Cloudflare challenge answer via POST with form data.
+    pub async fn post_challenge_answer(
+        &self,
+        original_url: &str,
+        submit_path: &str,
+        form_params: &[(String, String)],
+        answer: &str,
+    ) -> Result<StealthResponse, StealthHttpError> {
+        let base = url::Url::parse(original_url).map_err(|e| {
+            StealthHttpError::ChallengeFailed(format!("Invalid URL: {e}"))
+        })?;
+        let submit_url = base.join(submit_path).map_err(|e| {
+            StealthHttpError::ChallengeFailed(format!("Invalid submit path: {e}"))
+        })?;
+
+        let mut form = form_params.to_vec();
+        form.push(("jschl_answer".into(), answer.into()));
+
+        debug!(url = %submit_url, "Submitting challenge answer");
+
+        let response = self
+            .client
+            .post(submit_url.as_str())
+            .header("Referer", original_url)
+            .header("Origin", format!("{}://{}", base.scheme(), base.host_str().unwrap_or("")))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", &self.fingerprint.navigator.language)
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Upgrade-Insecure-Requests", "1")
+            .form(&form)
+            .send()
+            .await
+            .map_err(StealthHttpError::Request)?;
+
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = response.text().await.map_err(StealthHttpError::Request)?;
+
+        Ok(StealthResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+}
+
 /// Response from a stealth HTTP request.
 pub struct StealthResponse {
     /// HTTP status code

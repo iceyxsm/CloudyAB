@@ -5,7 +5,7 @@
 
 use boa_engine::{Context, Source};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Errors from challenge solving.
 #[derive(Debug, Error)]
