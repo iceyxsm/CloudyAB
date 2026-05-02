@@ -33,7 +33,7 @@ impl Orchestrator {
     /// `set_browser_engine` — this allows the MCP binary to wire them
     /// without core depending on Layer 2 crates.
     pub fn new(config: CloudyAbConfig) -> Self {
-        let router = LayerRouter::new(config.auto_escalate);
+        let router = LayerRouter::new(config.engine.auto_escalate);
         Self {
             router,
             stealth_engine: None,
@@ -200,7 +200,7 @@ impl Orchestrator {
             fingerprint: None,
             proxy: self.config.proxy.clone(),
             persist_cookies: true,
-            timeout_secs: self.config.default_timeout_secs,
+            timeout_secs: self.config.engine.timeout_secs,
             preferred_layer: Some(Layer::Browser),
         };
 

@@ -1,0 +1,49 @@
+# CloudyAB Configuration
+# Copy this file to cloudyab.toml and customize as needed.
+# Or run: cloudyab --init
+
+[engine]
+timeout_secs = 30
+auto_escalate = true
+max_ram_mb = 500
+log_level = "info"
+
+[stealth_http]
+enabled = true
+# user_agent = "custom user agent string"
+max_redirects = 10
+
+[browser]
+enabled = true
+# binary_path = "/path/to/obscura"  # Or set CLOUDYAB_BROWSER_BIN env var
+headless = true
+viewport_width = 1920
+viewport_height = 1080
+disable_gpu = true
+extra_args = []
+
+[solver]
+enabled = true
+use_local = true
+models_dir = "models"
+use_cloud_fallback = false
+# cloud_api_url = "https://api.capsolver.com"
+# cloud_api_key = "your-api-key-here"
+max_attempts = 3
+
+[cookies]
+enabled = true
+db_path = "data/cookies.db"
+
+# [proxy]
+# url = "socks5://127.0.0.1:1080"
+# username = "user"
+# password = "pass"
+
+[ai]
+enabled = false
+provider = "openai"  # "openai", "anthropic", or "local"
+# api_key = "sk-your-openai-key-here"
+model = "gpt-4o-mini"
+# api_base_url = "http://localhost:11434/v1"  # For local LLMs (Ollama)
+max_steps = 20

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use cloudyab_core::config::CloudyAbConfig;
 use cloudyab_core::engine::EngineError;
 use cloudyab_core::orchestrator::Orchestrator;
 use cloudyab_types::{Layer, SessionConfig, SnapshotOptions};
@@ -17,11 +18,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::ai_browse;
+
 /// The CloudyAB MCP server that exposes browser automation tools.
 #[derive(Clone)]
 pub struct CloudyAbServer {
     tool_router: ToolRouter<Self>,
     orchestrator: Arc<RwLock<Orchestrator>>,
+    config: Arc<CloudyAbConfig>,
 }
 
 /// Input for the `navigate` tool.
@@ -82,6 +86,15 @@ pub struct GetCookiesParams {
     pub domain: Option<String>,
 }
 
+/// Input for the `ai_browse` tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AiBrowseParams {
+    /// Natural language goal (e.g., "Find the price of iPhone 16 on Amazon")
+    pub goal: String,
+    /// Starting URL to navigate to before the AI takes over (optional)
+    pub url: Option<String>,
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for CloudyAbServer {
     fn get_info(&self) -> ServerInfo {
@@ -94,10 +107,11 @@ impl ServerHandler for CloudyAbServer {
 #[tool_router]
 impl CloudyAbServer {
     /// Create a new CloudyAB MCP server.
-    pub fn new(orchestrator: Arc<RwLock<Orchestrator>>) -> Self {
+    pub fn new(orchestrator: Arc<RwLock<Orchestrator>>, config: Arc<CloudyAbConfig>) -> Self {
         Self {
             tool_router: Self::tool_router(),
             orchestrator,
+            config,
         }
     }
 
@@ -224,6 +238,32 @@ impl CloudyAbServer {
         };
 
         let content = Content::json(&cookies)
+            .map_err(|e| McpError::internal_error(format!("Serialization failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![content]))
+    }
+
+    /// AI-powered autonomous browsing to accomplish a goal.
+    #[tool(description = "Use AI to autonomously browse the web and extract information. Provide a natural language goal and optionally a starting URL. The AI agent will navigate, click, fill forms, and extract data to accomplish the goal. Requires [ai] section configured in cloudyab.toml with an API key.")]
+    async fn ai_browse_tool(&self, params: Parameters<AiBrowseParams>) -> Result<CallToolResult, McpError> {
+        let params = params.0;
+
+        if !self.config.ai.enabled {
+            return Err(McpError::internal_error(
+                "AI browsing is disabled. Enable it in [ai] section of cloudyab.toml".to_string(),
+                None,
+            ));
+        }
+
+        let result = ai_browse::ai_browse(
+            &self.orchestrator,
+            &self.config.ai,
+            &params.goal,
+            params.url.as_deref(),
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let content = Content::json(&result)
             .map_err(|e| McpError::internal_error(format!("Serialization failed: {e}"), None))?;
         Ok(CallToolResult::success(vec![content]))
     }

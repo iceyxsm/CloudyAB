@@ -3,6 +3,9 @@
 //! Exposes the CloudyAB headless browser engine as an MCP (Model Context Protocol)
 //! server over stdio, allowing AI agents to navigate, interact with, and extract
 //! data from websites protected by Cloudflare, AWS WAF, and other anti-bot systems.
+//!
+//! Configuration is loaded from `cloudyab.toml` (or `CLOUDYAB_CONFIG` env var).
+//! Run with `--init` to generate a default config file.
 
 use std::sync::Arc;
 
@@ -20,15 +23,30 @@ use tokio::sync::RwLock;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod tools;
+mod ai_browse;
 
 use tools::CloudyAbServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Handle --init flag to generate default config
+    if std::env::args().any(|a| a == "--init") {
+        let toml = CloudyAbConfig::generate_default_toml();
+        std::fs::write("cloudyab.toml", &toml)?;
+        println!("Generated cloudyab.toml with default configuration");
+        return Ok(());
+    }
+
+    // Load configuration from file (or defaults)
+    let config = CloudyAbConfig::load()
+        .map_err(|e| anyhow::anyhow!("Configuration error: {e}"))?;
+
     // Initialize structured logging to stderr (stdout is for MCP protocol)
+    let log_level = config.engine.log_level.clone();
     fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(&log_level)),
         )
         .with_target(false)
         .json()
@@ -37,35 +55,56 @@ async fn main() -> Result<()> {
 
     tracing::info!("CloudyAB MCP server starting");
 
-    // Load configuration (defaults for now)
-    let config = CloudyAbConfig::default();
-
     // Create the orchestrator
-    let mut orchestrator = Orchestrator::new(config);
+    let mut orchestrator = Orchestrator::new(config.clone());
 
-    // Create and register the stealth-HTTP engine with a default fingerprint
-    let fingerprint = default_fingerprint();
-    let stealth_engine = StealthEngine::new(fingerprint.clone())
-        .map_err(|e| anyhow::anyhow!("Failed to create stealth engine: {e}"))?;
-    orchestrator.set_stealth_engine(Arc::new(stealth_engine));
+    // Conditionally register the stealth-HTTP engine
+    if config.stealth_http.enabled {
+        let fingerprint = default_fingerprint();
+        let stealth_engine = StealthEngine::new(fingerprint.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to create stealth engine: {e}"))?;
+        orchestrator.set_stealth_engine(Arc::new(stealth_engine));
+        tracing::info!("Stealth-HTTP engine registered");
 
-    // Launch the browser engine (requires Obscura/stealth binary in PATH or CLOUDYAB_BROWSER_BIN)
-    let browser_config = BrowserConfig::default();
-    match BrowserEngine::launch(browser_config, &fingerprint).await {
-        Ok(browser_engine) => {
-            orchestrator.set_browser_engine(Arc::new(browser_engine));
-            tracing::info!("Browser engine registered (Obscura)");
+        // Conditionally register the browser engine
+        if config.browser.enabled {
+            let browser_config = BrowserConfig {
+                binary_path: config.browser.binary_path
+                    .as_ref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_default(),
+                headless: config.browser.headless,
+                viewport_width: config.browser.viewport_width,
+                viewport_height: config.browser.viewport_height,
+                disable_gpu: config.browser.disable_gpu,
+                extra_args: config.browser.extra_args.clone(),
+                timeout_secs: config.engine.timeout_secs,
+                user_data_dir: None,
+                proxy_url: config.proxy.as_ref().map(|p| p.url.clone()),
+            };
+
+            match BrowserEngine::launch(browser_config, &fingerprint).await {
+                Ok(browser_engine) => {
+                    orchestrator.set_browser_engine(Arc::new(browser_engine));
+                    tracing::info!("Browser engine registered");
+                }
+                Err(e) => {
+                    tracing::warn!("Browser engine unavailable: {e}");
+                }
+            }
+        } else {
+            tracing::info!("Browser engine disabled by config");
         }
-        Err(e) => {
-            tracing::warn!("Browser engine unavailable, running HTTP-only mode: {e}");
-        }
+    } else {
+        tracing::info!("Stealth-HTTP engine disabled by config");
     }
 
     // Wrap orchestrator for shared access
     let orchestrator = Arc::new(RwLock::new(orchestrator));
+    let config = Arc::new(config);
 
     // Create the MCP server
-    let server = CloudyAbServer::new(orchestrator);
+    let server = CloudyAbServer::new(orchestrator, config);
 
     // Run on stdio transport
     tracing::info!("Starting MCP server on stdio transport");
