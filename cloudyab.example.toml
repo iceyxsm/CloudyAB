@@ -7,6 +7,7 @@ timeout_secs = 30
 auto_escalate = true
 max_ram_mb = 500
 log_level = "info"
+http_port = 9222  # HTTP task queue port (0 = disabled)
 
 [stealth_http]
 enabled = true

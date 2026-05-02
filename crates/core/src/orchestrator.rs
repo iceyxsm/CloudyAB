@@ -8,13 +8,13 @@
 use std::sync::Arc;
 
 use cloudyab_types::{
-    CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SessionConfig,
-    SnapshotOptions,
+    CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot,
+    SessionConfig, SnapshotOptions,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::CloudyAbConfig;
-use crate::engine::{BrowsingEngine, CaptchaSolver, CookiePersistence, EngineError};
+use crate::engine::{BrowsingEngine, CaptchaSolver, CookiePersistence, DetectedChallenge, EngineError};
 use crate::router::LayerRouter;
 
 /// Maximum number of captcha solve attempts per navigation.
@@ -206,9 +206,9 @@ impl Orchestrator {
 
         // Attempt auto-captcha solving if solver is registered
         if let Some(ref solver) = self.solver {
-            if let Some(captcha_type) = self.detect_captcha().await {
-                info!(captcha = ?captcha_type, "Captcha detected, attempting auto-solve");
-                match self.solve_captcha(solver, &captcha_type).await {
+            if let Some(challenge) = self.detect_captcha().await {
+                info!(captcha = ?challenge.captcha_type, confidence = challenge.confidence, "Captcha detected, attempting auto-solve");
+                match self.solve_captcha(solver, &challenge).await {
                     Ok(true) => {
                         result.captcha_solved = true;
                         info!("Captcha solved successfully");
@@ -321,10 +321,24 @@ impl Orchestrator {
         }
     }
 
-    /// Detect if the current page contains a captcha by checking the snapshot.
-    /// Returns the detected captcha type, or None if no captcha is present.
-    async fn detect_captcha(&self) -> Option<CaptchaType> {
+    /// Detect if the current page contains a captcha using the engine's DOM inspection.
+    /// Falls back to snapshot-based detection if the engine doesn't support DOM detection.
+    /// Returns the highest-confidence detection with its container selector.
+    async fn detect_captcha(&self) -> Option<DetectedChallenge> {
         let engine = self.active_engine().await.ok()?;
+
+        // Try DOM-based detection first (browser engine)
+        let challenges = engine.detect_challenges().await;
+        if let Some(best) = challenges.into_iter().next() {
+            debug!(
+                captcha = ?best.captcha_type,
+                confidence = best.confidence,
+                "DOM-based challenge detection found captcha"
+            );
+            return Some(best);
+        }
+
+        // Fall back to snapshot-based detection
         let options = SnapshotOptions {
             interactive_only: false,
             compact: true,
@@ -332,30 +346,71 @@ impl Orchestrator {
             selector: None,
         };
         let snapshot = engine.snapshot(&options).await.ok()?;
-        detect_captcha_in_snapshot(&snapshot.tree)
+        detect_captcha_in_snapshot(&snapshot.tree).map(|captcha_type| DetectedChallenge {
+            captcha_type,
+            confidence: 0.6,
+            container_selector: None,
+            is_interstitial: false,
+        })
     }
 
-    /// Attempt to solve a captcha: screenshot → solve → submit answer.
+    /// Attempt to solve a captcha: screenshot → solve → submit answer → verify.
     /// Returns Ok(true) if solved successfully, Ok(false) if solver returned failure.
     async fn solve_captcha(
         &self,
         solver: &Arc<dyn CaptchaSolver>,
-        captcha_type: &CaptchaType,
+        challenge: &DetectedChallenge,
     ) -> Result<bool, EngineError> {
         let engine = self.active_engine().await?;
         let url = engine.current_url().await.unwrap_or_default();
 
         for attempt in 0..MAX_CAPTCHA_RETRIES {
-            info!(attempt = attempt + 1, "Captcha solve attempt");
+            info!(attempt = attempt + 1, captcha = ?challenge.captcha_type, "Captcha solve attempt");
             let screenshot = engine.screenshot().await?;
-            let result = solver.solve(&screenshot, captcha_type, &url).await?;
+            let result = solver.solve(&screenshot, &challenge.captcha_type, &url).await?;
 
-            if result.success {
+            if !result.success {
+                debug!(attempt = attempt + 1, "Solver returned unsuccessful result");
+                continue;
+            }
+
+            // Submit the solution back to the page
+            if let Some(ref solution) = result.solution {
+                let container = challenge.container_selector.as_deref();
+                match engine.submit_solution(solution, container).await {
+                    Ok(()) => {
+                        info!("Solution submitted to page successfully");
+                        // Brief wait for page to process the solution
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        // Verify the captcha is gone
+                        if self.verify_captcha_solved().await {
+                            return Ok(true);
+                        }
+                        debug!("Captcha still present after submission, retrying");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to submit solution to page");
+                    }
+                }
+            } else {
+                // No solution payload but solver said success (token-based solvers)
                 return Ok(true);
             }
         }
 
         Ok(false)
+    }
+
+    /// Verify that the captcha has been solved by re-running detection.
+    /// Returns true if no captcha is detected anymore.
+    async fn verify_captcha_solved(&self) -> bool {
+        let engine = match self.active_engine().await {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+
+        let challenges = engine.detect_challenges().await;
+        challenges.is_empty()
     }
 }
 

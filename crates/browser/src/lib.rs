@@ -5,6 +5,7 @@
 //! and accessibility tree extraction.
 //! This is Layer 2 — used when the HTTP stealth layer can't handle the site.
 
+pub mod challenge;
 pub mod config;
 pub mod engine;
 pub mod stealth;

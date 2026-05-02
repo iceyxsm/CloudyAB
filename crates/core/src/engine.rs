@@ -2,9 +2,22 @@
 
 use async_trait::async_trait;
 use cloudyab_types::{
-    CaptchaResult, CaptchaType, Cookie, CookieJar, NavigationResult, PageSnapshot, SessionConfig,
-    SnapshotOptions,
+    CaptchaResult, CaptchaSolution, CaptchaType, Cookie, CookieJar, NavigationResult,
+    PageSnapshot, SessionConfig, SnapshotOptions,
 };
+
+/// Detected challenge information returned by engines.
+#[derive(Debug, Clone)]
+pub struct DetectedChallenge {
+    /// The type of captcha/challenge detected.
+    pub captcha_type: CaptchaType,
+    /// Confidence score (0.0 - 1.0).
+    pub confidence: f32,
+    /// CSS selector for the challenge container element.
+    pub container_selector: Option<String>,
+    /// Whether this is a full-page interstitial (vs embedded widget).
+    pub is_interstitial: bool,
+}
 
 /// Trait for a browsing engine (HTTP stealth or full browser).
 #[async_trait]
@@ -38,6 +51,26 @@ pub trait BrowsingEngine: Send + Sync {
 
     /// Check if the engine can handle this URL without escalation.
     async fn can_handle(&self, url: &str) -> bool;
+
+    /// Detect challenges/captchas on the current page using DOM inspection.
+    /// Returns detected challenges sorted by confidence (highest first).
+    /// Default implementation returns empty (no detection capability).
+    async fn detect_challenges(&self) -> Vec<DetectedChallenge> {
+        Vec::new()
+    }
+
+    /// Submit a captcha solution to the page.
+    /// Handles different solution types (token injection, text input, slider drag, coordinates).
+    /// Default implementation returns an error (not supported by this engine).
+    async fn submit_solution(
+        &self,
+        _solution: &CaptchaSolution,
+        _container_selector: Option<&str>,
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Internal(
+            "Solution submission not supported by this engine".into(),
+        ))
+    }
 
     /// Name of this engine for logging.
     fn name(&self) -> &str;

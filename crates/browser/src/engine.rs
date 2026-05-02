@@ -11,7 +11,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chromiumoxide::browser::{Browser, BrowserConfig as CdpBrowserConfig};
 use chromiumoxide::page::Page;
-use cloudyab_core::engine::{BrowsingEngine, EngineError};
+use cloudyab_core::engine::{BrowsingEngine, DetectedChallenge, EngineError};
+use cloudyab_types::captcha::CaptchaSolution;
 use cloudyab_types::cookie::{Cookie, CookieJar, SameSite};
 use cloudyab_types::fingerprint::FingerprintProfile;
 use cloudyab_types::page::{
@@ -22,6 +23,7 @@ use futures::StreamExt;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::challenge;
 use crate::config::BrowserConfig;
 use crate::stealth::build_stealth_script;
 
@@ -346,6 +348,46 @@ impl BrowsingEngine for BrowserEngine {
         true
     }
 
+    async fn detect_challenges(&self) -> Vec<DetectedChallenge> {
+        let page = match self.active_page().await {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+
+        let raw: serde_json::Value = match page.evaluate(challenge::detection_script()).await {
+            Ok(result) => result.into_value().unwrap_or(serde_json::Value::Null),
+            Err(e) => {
+                debug!("Challenge detection JS failed: {e}");
+                return Vec::new();
+            }
+        };
+
+        challenge::parse_detection_results(&raw)
+            .into_iter()
+            .map(|d| DetectedChallenge {
+                captcha_type: d.captcha_type,
+                confidence: d.confidence,
+                container_selector: d.container_selector,
+                is_interstitial: d.is_interstitial,
+            })
+            .collect()
+    }
+
+    async fn submit_solution(
+        &self,
+        solution: &CaptchaSolution,
+        container_selector: Option<&str>,
+    ) -> Result<(), EngineError> {
+        let page = self.active_page().await?;
+        let js = build_submit_solution_js(solution, container_selector);
+
+        page.evaluate(js)
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Solution submission failed: {e}")))?;
+
+        Ok(())
+    }
+
     fn name(&self) -> &str {
         "obscura-browser"
     }
@@ -524,4 +566,112 @@ fn parse_snapshot_result(
         tree,
         refs,
     })
+}
+
+/// Build JavaScript to submit a captcha solution to the page.
+/// Handles different solution types: token injection, text input, slider drag, and coordinates.
+fn build_submit_solution_js(solution: &CaptchaSolution, container: Option<&str>) -> String {
+    let container_js = container
+        .map(|s| format!("'{s}'"))
+        .unwrap_or_else(|| "null".to_string());
+
+    match solution {
+        CaptchaSolution::Token(token) => build_token_submit_js(&container_js, token),
+        CaptchaSolution::Text(text) => build_text_submit_js(&container_js, text),
+        CaptchaSolution::SliderOffset(offset) => build_slider_submit_js(&container_js, *offset),
+        CaptchaSolution::Coordinates(coords) => build_coords_submit_js(&container_js, coords),
+    }
+}
+
+/// Build JS for token-based solution submission (Turnstile, reCAPTCHA, hCaptcha).
+fn build_token_submit_js(container_js: &str, token: &str) -> String {
+    let escaped_token = token.replace('\\', "\\\\").replace('\'', "\\'");
+    format!(
+        r#"(() => {{
+    const container = {container_js} ? document.querySelector({container_js}) : document;
+    const turnstile = container.querySelector('[data-callback]');
+    if (turnstile) {{
+        const cb = turnstile.getAttribute('data-callback');
+        if (window[cb]) {{ window[cb]('{escaped_token}'); return true; }}
+    }}
+    const textarea = container.querySelector('textarea[name*="response"], #g-recaptcha-response, #h-captcha-response');
+    if (textarea) {{
+        textarea.value = '{escaped_token}';
+        textarea.dispatchEvent(new Event('input', {{bubbles: true}}));
+        const form = textarea.closest('form');
+        if (form) form.submit();
+        return true;
+    }}
+    if (window.___grecaptcha_cfg) {{
+        const clients = window.___grecaptcha_cfg.clients;
+        for (const key in clients) {{
+            const client = clients[key];
+            if (client && client.callback) {{ client.callback('{escaped_token}'); return true; }}
+        }}
+    }}
+    return false;
+}})()"#
+    )
+}
+
+/// Build JS for text-based solution submission (OCR captchas).
+fn build_text_submit_js(container_js: &str, text: &str) -> String {
+    let escaped_text = text.replace('\\', "\\\\").replace('\'', "\\'");
+    format!(
+        r#"(() => {{
+    const container = {container_js} ? document.querySelector({container_js}) : document;
+    const input = container.querySelector('input[name*="captcha" i], input[placeholder*="code" i], input[placeholder*="captcha" i], input[type="text"]:not([name=""])');
+    if (!input) return false;
+    input.focus();
+    input.value = '{escaped_text}';
+    input.dispatchEvent(new Event('input', {{bubbles: true}}));
+    input.dispatchEvent(new Event('change', {{bubbles: true}}));
+    const form = input.closest('form');
+    const btn = form ? form.querySelector('button[type="submit"], input[type="submit"], button:not([type])') : null;
+    if (btn) btn.click();
+    else if (form) form.submit();
+    return true;
+}})()"#
+    )
+}
+
+/// Build JS for slider-based solution submission (drag puzzles).
+fn build_slider_submit_js(container_js: &str, offset: i32) -> String {
+    format!(
+        r#"(() => {{
+    const container = {container_js} ? document.querySelector({container_js}) : document;
+    const slider = container.querySelector('.slider-handle, .slide-btn, [data-slider-handle], .handler');
+    if (!slider) return false;
+    const rect = slider.getBoundingClientRect();
+    const startX = rect.left + rect.width / 2;
+    const startY = rect.top + rect.height / 2;
+    const endX = startX + {offset};
+    slider.dispatchEvent(new MouseEvent('mousedown', {{clientX: startX, clientY: startY, bubbles: true}}));
+    document.dispatchEvent(new MouseEvent('mousemove', {{clientX: endX, clientY: startY, bubbles: true}}));
+    document.dispatchEvent(new MouseEvent('mouseup', {{clientX: endX, clientY: startY, bubbles: true}}));
+    return true;
+}})()"#
+    )
+}
+
+/// Build JS for coordinate-based solution submission (image grid selection).
+fn build_coords_submit_js(container_js: &str, coords: &[(i32, i32)]) -> String {
+    let coords_json = serde_json::to_string(coords).unwrap_or_else(|_| "[]".into());
+    format!(
+        r#"(() => {{
+    const container = {container_js} ? document.querySelector({container_js}) : document;
+    const target = container.querySelector('img, canvas, .captcha-image, [data-captcha-image]');
+    if (!target) return false;
+    const rect = target.getBoundingClientRect();
+    const coords = {coords_json};
+    for (const [x, y] of coords) {{
+        const clientX = rect.left + x;
+        const clientY = rect.top + y;
+        target.dispatchEvent(new MouseEvent('click', {{clientX, clientY, bubbles: true}}));
+    }}
+    const btn = container.querySelector('button[type="submit"], .verify-btn, [data-action="verify"]');
+    if (btn) btn.click();
+    return true;
+}})()"#
+    )
 }
