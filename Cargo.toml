@@ -56,6 +56,7 @@ ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
 
 # Image processing
 image = "0.25"
+ndarray = "0.17"
 
 # JS interpreter (for CF challenges)
 boa_engine = "0.19"

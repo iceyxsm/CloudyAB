@@ -4,5 +4,6 @@
 //! with optional cloud API fallback for complex captchas.
 
 pub mod local;
+pub mod preprocess;
 pub mod registry;
 pub mod traits;
