@@ -1,5 +1,9 @@
 # CloudyAB
 
+<p align="center">
+  <img src=".github/res/Cloudy.png" alt="CloudyAB" width="200" />
+</p>
+
 Stealth headless browser with MCP support and AI-powered captcha solving.
 
 Built in Rust for performance and low memory footprint (200-500MB RAM).
