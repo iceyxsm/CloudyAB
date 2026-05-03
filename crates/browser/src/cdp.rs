@@ -110,13 +110,42 @@ impl CdpClient {
     /// Returns the `result` field from the CDP response, or an error if the
     /// call times out or the server returns an error object.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, CdpError> {
+        self.call_raw(method, params, None).await
+    }
+
+    /// Send a CDP method call targeting a specific session (flat mode).
+    ///
+    /// In flat CDP mode, commands targeting a page require the `sessionId`
+    /// returned by `Target.attachToTarget`.
+    pub async fn call_session(
+        &self,
+        method: &str,
+        params: Value,
+        session_id: &str,
+    ) -> Result<Value, CdpError> {
+        self.call_raw(method, params, Some(session_id)).await
+    }
+
+    /// Internal: send a CDP call with optional sessionId.
+    async fn call_raw(
+        &self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Result<Value, CdpError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
-        let msg = serde_json::json!({
+        let mut msg = serde_json::json!({
             "id": id,
             "method": method,
             "params": params,
         });
+
+        if let Some(sid) = session_id {
+            msg.as_object_mut()
+                .unwrap()
+                .insert("sessionId".to_string(), Value::String(sid.to_string()));
+        }
 
         let text =
             serde_json::to_string(&msg).map_err(|e| CdpError::Serialization(e.to_string()))?;

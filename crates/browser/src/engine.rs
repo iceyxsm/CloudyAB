@@ -36,6 +36,7 @@ const CDP_POLL_INTERVAL_MS: u64 = 200;
 pub struct BrowserEngine {
     cdp: Arc<CdpClient>,
     current_target: RwLock<Option<String>>,
+    current_session: RwLock<Option<String>>,
     stealth_script: String,
     config: BrowserConfig,
     _child: Arc<tokio::process::Child>,
@@ -89,6 +90,7 @@ impl BrowserEngine {
         Ok(Self {
             cdp: Arc::new(cdp),
             current_target: RwLock::new(None),
+            current_session: RwLock::new(None),
             stealth_script,
             config,
             _child: child_handle,
@@ -110,7 +112,7 @@ impl BrowserEngine {
             .ok_or_else(|| EngineError::BrowserError("No targetId in response".into()))?
             .to_string();
 
-        // Attach to the target to get a session
+        // Attach to the target to get a session (flat mode)
         let attach_result = self
             .cdp
             .call(
@@ -120,16 +122,22 @@ impl BrowserEngine {
             .await
             .map_err(EngineError::from)?;
 
-        let _session_id = attach_result
+        let session_id = attach_result
             .get("sessionId")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .ok_or_else(|| EngineError::BrowserError("No sessionId in attach response".into()))?
+            .to_string();
+
+        // Store session ID for subsequent calls
+        {
+            let mut guard = self.current_session.write().await;
+            *guard = Some(session_id.clone());
+        }
 
         // Inject stealth script before navigation (non-fatal if unsupported)
         if !self.stealth_script.is_empty() {
             let inject_result = self
-                .cdp
-                .call(
+                .session_call(
                     "Page.addScriptToEvaluateOnNewDocument",
                     json!({ "source": &self.stealth_script }),
                 )
@@ -141,12 +149,11 @@ impl BrowserEngine {
         }
 
         // Enable page events
-        let _ = self.cdp.call("Page.enable", json!({})).await;
-        let _ = self.cdp.call("Network.enable", json!({})).await;
+        let _ = self.session_call("Page.enable", json!({})).await;
+        let _ = self.session_call("Network.enable", json!({})).await;
 
         // Navigate to the actual URL
-        self.cdp
-            .call("Page.navigate", json!({ "url": url }))
+        self.session_call("Page.navigate", json!({ "url": url }))
             .await
             .map_err(|e| EngineError::Navigation(format!("Navigate failed: {e}")))?;
 
@@ -158,6 +165,24 @@ impl BrowserEngine {
         *guard = Some(target_id.clone());
 
         Ok(target_id)
+    }
+
+    /// Send a CDP call on the current session (page-level commands).
+    /// Falls back to browser-level call if no session is active.
+    async fn session_call(&self, method: &str, params: Value) -> Result<Value, EngineError> {
+        let session = self.current_session.read().await;
+        match session.as_deref() {
+            Some(sid) => self
+                .cdp
+                .call_session(method, params, sid)
+                .await
+                .map_err(EngineError::from),
+            None => self
+                .cdp
+                .call(method, params)
+                .await
+                .map_err(EngineError::from),
+        }
     }
 
     /// Wait for the page to finish loading (poll document.readyState).
@@ -172,8 +197,7 @@ impl BrowserEngine {
             }
 
             let result = self
-                .cdp
-                .call(
+                .session_call(
                     "Runtime.evaluate",
                     json!({ "expression": "document.readyState" }),
                 )
@@ -198,8 +222,7 @@ impl BrowserEngine {
     /// Evaluate JavaScript on the current page and return the result.
     async fn evaluate(&self, expression: &str) -> Result<Value, EngineError> {
         let result = self
-            .cdp
-            .call(
+            .session_call(
                 "Runtime.evaluate",
                 json!({
                     "expression": expression,
@@ -231,8 +254,7 @@ impl BrowserEngine {
     /// Get the current page URL via CDP.
     async fn get_url(&self) -> Result<String, EngineError> {
         let result = self
-            .cdp
-            .call(
+            .session_call(
                 "Runtime.evaluate",
                 json!({ "expression": "window.location.href", "returnByValue": true }),
             )
@@ -254,8 +276,7 @@ impl BrowserEngine {
     async fn screenshot_via_html_render(&self) -> Result<Vec<u8>, EngineError> {
         // Get the document's outer HTML via DOM.getOuterHTML
         let doc_result = self
-            .cdp
-            .call("DOM.getDocument", json!({ "depth": 0 }))
+            .session_call("DOM.getDocument", json!({ "depth": 0 }))
             .await
             .map_err(|e| EngineError::ScreenshotFailed(format!("DOM.getDocument failed: {e}")))?;
 
@@ -268,8 +289,7 @@ impl BrowserEngine {
             })?;
 
         let html_result = self
-            .cdp
-            .call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
+            .session_call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
             .await
             .map_err(|e| EngineError::ScreenshotFailed(format!("DOM.getOuterHTML failed: {e}")))?;
 
@@ -329,7 +349,7 @@ impl BrowsingEngine for BrowserEngine {
 
         // Try Obscura's native LP.getMarkdown first (AI-optimized DOM-to-Markdown).
         // Falls back to JS DOM walker if LP domain is unavailable.
-        let lp_result = self.cdp.call("LP.getMarkdown", json!({})).await;
+        let lp_result = self.session_call("LP.getMarkdown", json!({})).await;
         if let Ok(ref val) = lp_result {
             if let Some(markdown) = val.get("markdown").and_then(|v| v.as_str()) {
                 if !markdown.is_empty() {
@@ -425,8 +445,7 @@ impl BrowsingEngine for BrowserEngine {
         // Obscura is a DOM-only engine without a visual renderer, so this will
         // return a protocol error — fall back to server-side HTML rendering.
         let cdp_result = self
-            .cdp
-            .call("Page.captureScreenshot", json!({ "format": "png" }))
+            .session_call("Page.captureScreenshot", json!({ "format": "png" }))
             .await;
 
         match cdp_result {
@@ -456,8 +475,7 @@ impl BrowsingEngine for BrowserEngine {
         let url = self.get_url().await?;
 
         let result = self
-            .cdp
-            .call("Network.getCookies", json!({}))
+            .session_call("Network.getCookies", json!({}))
             .await
             .map_err(|e| EngineError::CookieError(format!("Failed to get cookies: {e}")))?;
 
@@ -511,22 +529,21 @@ impl BrowsingEngine for BrowserEngine {
 
     async fn set_cookies(&self, cookies: &[Cookie]) -> Result<(), EngineError> {
         for cookie in cookies {
-            self.cdp
-                .call(
-                    "Network.setCookie",
-                    json!({
-                        "name": cookie.name,
-                        "value": cookie.value,
-                        "domain": cookie.domain,
-                        "path": cookie.path,
-                        "secure": cookie.secure,
-                        "httpOnly": cookie.http_only,
-                    }),
-                )
-                .await
-                .map_err(|e| {
-                    EngineError::CookieError(format!("Failed to set cookie '{}': {e}", cookie.name))
-                })?;
+            self.session_call(
+                "Network.setCookie",
+                json!({
+                    "name": cookie.name,
+                    "value": cookie.value,
+                    "domain": cookie.domain,
+                    "path": cookie.path,
+                    "secure": cookie.secure,
+                    "httpOnly": cookie.http_only,
+                }),
+            )
+            .await
+            .map_err(|e| {
+                EngineError::CookieError(format!("Failed to set cookie '{}': {e}", cookie.name))
+            })?;
         }
         Ok(())
     }
