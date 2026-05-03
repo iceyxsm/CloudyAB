@@ -523,6 +523,10 @@ async fn run_navigation(state: &AppState, request: &TaskRequest) -> Result<TaskR
     let snapshot = if request.snapshot.unwrap_or(false) {
         let options = cloudyab_types::page::SnapshotOptions::default();
         match orchestrator.snapshot(&options).await {
+            Ok(s) if s.tree.is_empty() => {
+                warn!(url = %request.url, "Snapshot tree is empty (page may require JS execution)");
+                Some(format!("[empty] title=\"{}\" url=\"{}\"", s.title, s.url))
+            }
             Ok(s) => Some(s.tree),
             Err(e) => {
                 warn!(error = %e, "Snapshot generation failed");
