@@ -267,7 +267,7 @@ async fn list_tasks(
 
     let filtered: Vec<TaskSummary> = tasks
         .values()
-        .filter(|t| query.status.as_ref().map_or(true, |s| &t.status == s))
+        .filter(|t| query.status.as_ref().is_none_or(|s| &t.status == s))
         .take(limit)
         .map(|t| TaskSummary {
             id: t.id.clone(),
