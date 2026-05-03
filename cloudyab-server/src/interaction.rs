@@ -62,11 +62,7 @@ pub fn generate_click_sequence(target_x: f64, target_y: f64) -> Vec<InteractionC
 }
 
 /// Generate a human-like slider drag sequence.
-pub fn generate_drag_sequence(
-    start_x: f64,
-    start_y: f64,
-    end_x: f64,
-) -> Vec<InteractionCommand> {
+pub fn generate_drag_sequence(start_x: f64, start_y: f64, end_x: f64) -> Vec<InteractionCommand> {
     let simulator = MouseSimulator::new();
 
     // Approach the slider handle
@@ -118,7 +114,11 @@ pub fn generate_typing_sequence(text: &str) -> Vec<InteractionCommand> {
 }
 
 /// Generate a human-like coordinate click sequence (for image grid captchas).
-pub fn generate_multi_click_sequence(coords: &[(i32, i32)], base_x: f64, base_y: f64) -> Vec<InteractionCommand> {
+pub fn generate_multi_click_sequence(
+    coords: &[(i32, i32)],
+    base_x: f64,
+    base_y: f64,
+) -> Vec<InteractionCommand> {
     let simulator = MouseSimulator::new();
     let mut commands = Vec::new();
     let mut current = Point {
@@ -155,26 +155,36 @@ pub fn generate_multi_click_sequence(coords: &[(i32, i32)], base_x: f64, base_y:
 pub fn commands_to_js(commands: &[InteractionCommand]) -> String {
     let mut js_parts = Vec::new();
     js_parts.push("(async () => {".to_string());
-    js_parts.push("  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }".to_string());
+    js_parts
+        .push("  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }".to_string());
     js_parts.push("  function dispatch(type, x, y) {".to_string());
     js_parts.push("    const el = document.elementFromPoint(x, y) || document.body;".to_string());
-    js_parts.push("    el.dispatchEvent(new MouseEvent(type, {clientX:x, clientY:y, bubbles:true}));".to_string());
+    js_parts.push(
+        "    el.dispatchEvent(new MouseEvent(type, {clientX:x, clientY:y, bubbles:true}));"
+            .to_string(),
+    );
     js_parts.push("  }".to_string());
     js_parts.push("  function keyAt(ch) {".to_string());
     js_parts.push("    const el = document.activeElement || document.body;".to_string());
-    js_parts.push("    el.dispatchEvent(new KeyboardEvent('keydown', {key:ch, bubbles:true}));".to_string());
+    js_parts.push(
+        "    el.dispatchEvent(new KeyboardEvent('keydown', {key:ch, bubbles:true}));".to_string(),
+    );
     js_parts.push("    if (el.tagName==='INPUT'||el.tagName==='TEXTAREA') {".to_string());
     js_parts.push("      el.value += ch;".to_string());
     js_parts.push("      el.dispatchEvent(new Event('input', {bubbles:true}));".to_string());
     js_parts.push("    }".to_string());
-    js_parts.push("    el.dispatchEvent(new KeyboardEvent('keyup', {key:ch, bubbles:true}));".to_string());
+    js_parts.push(
+        "    el.dispatchEvent(new KeyboardEvent('keyup', {key:ch, bubbles:true}));".to_string(),
+    );
     js_parts.push("  }".to_string());
 
     for cmd in commands {
         match cmd {
             InteractionCommand::MouseMove(steps) => {
                 for (x, y, delay) in steps {
-                    js_parts.push(format!("  dispatch('mousemove',{x},{y}); await sleep({delay});"));
+                    js_parts.push(format!(
+                        "  dispatch('mousemove',{x},{y}); await sleep({delay});"
+                    ));
                 }
             }
             InteractionCommand::Click(x, y) => {

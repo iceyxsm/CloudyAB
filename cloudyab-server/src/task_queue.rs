@@ -679,7 +679,10 @@ async fn recover_tasks(state: AppState) {
         return;
     }
 
-    info!(count = recovered.len(), "Recovering tasks from persistent store");
+    info!(
+        count = recovered.len(),
+        "Recovering tasks from persistent store"
+    );
 
     for entry in recovered {
         let task_id = entry.id.clone();
