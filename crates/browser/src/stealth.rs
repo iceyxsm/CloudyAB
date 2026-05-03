@@ -14,6 +14,7 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         permissions_spoof(),
         plugins_spoof(),
         webgl_spoof(&profile.webgl.vendor, &profile.webgl.renderer),
+        webgl_rendering_noise(),
         canvas_noise_stable(),
         audio_context_spoof(),
         font_enumeration_spoof(&profile.navigator.platform),
@@ -26,6 +27,11 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         window_dimensions_spoof(profile.screen.width, profile.screen.height),
         event_timing_spoof(),
         native_function_masking(),
+        webrtc_spoof(),
+        cdp_leak_prevention(),
+        battery_api_spoof(),
+        media_devices_spoof(),
+        client_hints_spoof(&profile.navigator),
     ]
     .join("\n")
 }
@@ -372,5 +378,240 @@ Object.defineProperty(window, 'devicePixelRatio', {{get: () => {pixel_ratio}}});
         height = height,
         color_depth = color_depth,
         pixel_ratio = pixel_ratio,
+    )
+}
+
+/// WebGL rendering hash noise — adds subtle per-session variation to rendered output.
+/// Platforms hash the actual rendered 3D scene, not just vendor/renderer strings.
+fn webgl_rendering_noise() -> String {
+    r#"
+(() => {
+    const noiseSeed = Math.random() * 0.001;
+    const origReadPixels = WebGLRenderingContext.prototype.readPixels;
+    WebGLRenderingContext.prototype.readPixels = function() {
+        origReadPixels.apply(this, arguments);
+        const buf = arguments[6];
+        if (buf && buf.length) {
+            for (let i = 0; i < buf.length; i += 37) {
+                buf[i] = (buf[i] + 1) & 0xFF;
+            }
+        }
+    };
+    const origReadPixels2 = WebGL2RenderingContext.prototype.readPixels;
+    WebGL2RenderingContext.prototype.readPixels = function() {
+        origReadPixels2.apply(this, arguments);
+        const buf = arguments[6];
+        if (buf && buf.length) {
+            for (let i = 0; i < buf.length; i += 37) {
+                buf[i] = (buf[i] + 1) & 0xFF;
+            }
+        }
+    };
+})();
+"#
+    .to_string()
+}
+
+/// WebRTC IP leak prevention.
+/// Replaces real ICE candidates with mDNS hostnames to prevent local IP exposure.
+fn webrtc_spoof() -> String {
+    r#"
+(() => {
+    const origCreateOffer = RTCPeerConnection.prototype.createOffer;
+    const origCreateAnswer = RTCPeerConnection.prototype.createAnswer;
+
+    function sanitizeSDP(sdp) {
+        return sdp.replace(/([0-9]{1,3}\.){3}[0-9]{1,3}/g, '0.0.0.0');
+    }
+
+    RTCPeerConnection.prototype.createOffer = function() {
+        return origCreateOffer.apply(this, arguments).then(offer => {
+            offer.sdp = sanitizeSDP(offer.sdp);
+            return offer;
+        });
+    };
+
+    RTCPeerConnection.prototype.createAnswer = function() {
+        return origCreateAnswer.apply(this, arguments).then(answer => {
+            answer.sdp = sanitizeSDP(answer.sdp);
+            return answer;
+        });
+    };
+
+    const origAddEventListener = RTCPeerConnection.prototype.addEventListener;
+    RTCPeerConnection.prototype.addEventListener = function(type, listener, options) {
+        if (type === 'icecandidate') {
+            const wrappedListener = function(event) {
+                if (event.candidate && event.candidate.candidate) {
+                    const sanitized = new RTCIceCandidate({
+                        ...event.candidate,
+                        candidate: event.candidate.candidate.replace(
+                            /([0-9]{1,3}\.){3}[0-9]{1,3}/g, '0.0.0.0'
+                        )
+                    });
+                    listener({...event, candidate: sanitized});
+                } else {
+                    listener(event);
+                }
+            };
+            return origAddEventListener.call(this, type, wrappedListener, options);
+        }
+        return origAddEventListener.call(this, type, listener, options);
+    };
+})();
+"#
+    .to_string()
+}
+
+/// CDP Runtime.enable leak prevention.
+/// Prevents detection of CDP presence via Error stack getter trap.
+fn cdp_leak_prevention() -> String {
+    r#"
+(() => {
+    // Prevent Error.stack getter trap detection (used by Cloudflare/DataDome)
+    const origConsoleDebug = console.debug;
+    const origConsoleLog = console.log;
+
+    // Neuter console methods from triggering property access on Error objects
+    // by wrapping them to avoid the V8 inspector stack getter trap
+    const safeConsole = (orig) => function() {
+        const args = Array.from(arguments).map(arg => {
+            if (arg instanceof Error) return arg.message || String(arg);
+            return arg;
+        });
+        return orig.apply(this, args);
+    };
+    console.debug = safeConsole(origConsoleDebug);
+    console.log = safeConsole(origConsoleLog);
+
+    // Hide automation-related properties
+    delete window.cdc_adoQpoasnfa76pfcZLmcfl_;
+    delete document.$cdc_asdjflasutopfhvcZLmcfl_;
+
+    // Remove Puppeteer/Playwright markers
+    const automationProps = [
+        '__puppeteer_evaluation_script__',
+        '__playwright_evaluation_script__',
+        '__selenium_unwrapped',
+        '_Selenium_IDE_Recorder',
+        'callSelenium',
+        '_selenium',
+        '__webdriver_evaluate',
+        '__driver_evaluate',
+        '__webdriver_unwrapped',
+        '__driver_unwrapped',
+        '__fxdriver_evaluate',
+        '__fxdriver_unwrapped',
+    ];
+    automationProps.forEach(prop => {
+        try { delete window[prop]; } catch(e) {}
+        try { delete document[prop]; } catch(e) {}
+    });
+})();
+"#
+    .to_string()
+}
+
+/// Battery API spoofing.
+/// Returns realistic battery values instead of the default headless response.
+fn battery_api_spoof() -> String {
+    r#"
+(() => {
+    if (navigator.getBattery) {
+        navigator.getBattery = function() {
+            return Promise.resolve({
+                charging: true,
+                chargingTime: 0,
+                dischargingTime: Infinity,
+                level: 0.87 + Math.random() * 0.12,
+                addEventListener: function() {},
+                removeEventListener: function() {},
+                dispatchEvent: function() { return true; },
+                onchargingchange: null,
+                onchargingtimechange: null,
+                ondischargingtimechange: null,
+                onlevelchange: null,
+            });
+        };
+    }
+})();
+"#
+    .to_string()
+}
+
+/// MediaDevices spoofing.
+/// Returns realistic device enumeration (headless browsers often return empty).
+fn media_devices_spoof() -> String {
+    r#"
+(() => {
+    if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+        navigator.mediaDevices.enumerateDevices = function() {
+            return Promise.resolve([
+                {deviceId: '', groupId: 'default', kind: 'audioinput', label: ''},
+                {deviceId: '', groupId: 'default', kind: 'videoinput', label: ''},
+                {deviceId: '', groupId: 'default', kind: 'audiooutput', label: ''},
+            ]);
+        };
+    }
+})();
+"#
+    .to_string()
+}
+
+/// Client Hints (Sec-CH-UA) spoofing.
+/// Chrome 120+ uses Client Hints v2 — must match User-Agent claims.
+fn client_hints_spoof(nav: &cloudyab_types::fingerprint::NavigatorProfile) -> String {
+    let platform = if nav.platform.contains("Mac") {
+        "macOS"
+    } else {
+        "Windows"
+    };
+    let mobile = if nav.max_touch_points > 0 {
+        "true"
+    } else {
+        "false"
+    };
+
+    format!(
+        r#"
+(() => {{
+    Object.defineProperty(navigator, 'userAgentData', {{
+        get: () => ({{
+            brands: [
+                {{brand: "Chromium", version: "125"}},
+                {{brand: "Google Chrome", version: "125"}},
+                {{brand: "Not.A/Brand", version: "24"}}
+            ],
+            mobile: {mobile},
+            platform: "{platform}",
+            getHighEntropyValues: function(hints) {{
+                return Promise.resolve({{
+                    architecture: "x86",
+                    bitness: "64",
+                    brands: this.brands,
+                    fullVersionList: [
+                        {{brand: "Chromium", version: "125.0.6422.112"}},
+                        {{brand: "Google Chrome", version: "125.0.6422.112"}},
+                        {{brand: "Not.A/Brand", version: "24.0.0.0"}}
+                    ],
+                    mobile: this.mobile,
+                    model: "",
+                    platform: this.platform,
+                    platformVersion: "{platform_version}",
+                    uaFullVersion: "125.0.6422.112",
+                    wow64: false,
+                }});
+            }}
+        }})
+    }});
+}})();
+"#,
+        mobile = mobile,
+        platform = platform,
+        platform_version = if platform == "macOS" {
+            "14.5.0"
+        } else {
+            "15.0.0"
+        },
     )
 }
