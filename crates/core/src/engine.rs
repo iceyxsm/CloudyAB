@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use cloudyab_types::{
-    CaptchaResult, CaptchaSolution, CaptchaType, Cookie, CookieJar, NavigationResult,
-    PageSnapshot, SessionConfig, SnapshotOptions,
+    CaptchaResult, CaptchaSolution, CaptchaType, Cookie, CookieJar, NavigationResult, PageSnapshot,
+    SessionConfig, SnapshotOptions,
 };
 
 /// Detected challenge information returned by engines.

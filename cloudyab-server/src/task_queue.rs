@@ -351,8 +351,14 @@ async fn retry_task(
 async fn queue_stats(State(state): State<AppState>) -> Json<QueueStats> {
     let tasks = state.tasks.read().await;
     let total = tasks.len();
-    let pending = tasks.values().filter(|t| t.status == STATUS_PENDING).count();
-    let running = tasks.values().filter(|t| t.status == STATUS_RUNNING).count();
+    let pending = tasks
+        .values()
+        .filter(|t| t.status == STATUS_PENDING)
+        .count();
+    let running = tasks
+        .values()
+        .filter(|t| t.status == STATUS_RUNNING)
+        .count();
     let completed = tasks
         .values()
         .filter(|t| t.status == STATUS_COMPLETED)

@@ -8,13 +8,15 @@
 use std::sync::Arc;
 
 use cloudyab_types::{
-    CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot,
-    SessionConfig, SnapshotOptions,
+    CaptchaType, Cookie, CookieJar, Layer, NavigationResult, PageSnapshot, SessionConfig,
+    SnapshotOptions,
 };
 use tracing::{debug, info, warn};
 
 use crate::config::CloudyAbConfig;
-use crate::engine::{BrowsingEngine, CaptchaSolver, CookiePersistence, DetectedChallenge, EngineError};
+use crate::engine::{
+    BrowsingEngine, CaptchaSolver, CookiePersistence, DetectedChallenge, EngineError,
+};
 use crate::router::LayerRouter;
 
 /// Maximum number of captcha solve attempts per navigation.
@@ -367,7 +369,9 @@ impl Orchestrator {
         for attempt in 0..MAX_CAPTCHA_RETRIES {
             info!(attempt = attempt + 1, captcha = ?challenge.captcha_type, "Captcha solve attempt");
             let screenshot = engine.screenshot().await?;
-            let result = solver.solve(&screenshot, &challenge.captcha_type, &url).await?;
+            let result = solver
+                .solve(&screenshot, &challenge.captcha_type, &url)
+                .await?;
 
             if !result.success {
                 debug!(attempt = attempt + 1, "Solver returned unsuccessful result");
