@@ -191,6 +191,19 @@ impl Orchestrator {
         let stealth = self.get_stealth_engine()?;
 
         match stealth.navigate(config).await {
+            Ok(result) if self.is_challenge_response(&result) => {
+                if self.can_escalate().await {
+                    info!(
+                        status = result.status_code,
+                        url = %config.target_url,
+                        "Stealth-HTTP got challenge response, escalating to browser"
+                    );
+                    self.navigate_browser(config).await
+                } else {
+                    self.set_active_layer(Layer::StealthHttp).await;
+                    Ok(result)
+                }
+            }
             Ok(result) => {
                 self.set_active_layer(Layer::StealthHttp).await;
                 Ok(result)
@@ -273,6 +286,12 @@ impl Orchestrator {
             error,
             EngineError::ProtectionBlocked(_) | EngineError::BrowserError(_)
         )
+    }
+
+    /// Check if a navigation result indicates a challenge/interstitial page
+    /// that requires JS execution (browser engine) to proceed.
+    fn is_challenge_response(&self, result: &NavigationResult) -> bool {
+        matches!(result.status_code, 202 | 403 | 429 | 503)
     }
 
     /// Check if escalation is possible (browser engine registered + auto-escalate on).

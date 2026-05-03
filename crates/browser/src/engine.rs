@@ -327,6 +327,23 @@ impl BrowsingEngine for BrowserEngine {
 
         let url = self.get_url().await?;
 
+        // Try Obscura's native LP.getMarkdown first (AI-optimized DOM-to-Markdown).
+        // Falls back to JS DOM walker if LP domain is unavailable.
+        let lp_result = self.cdp.call("LP.getMarkdown", json!({})).await;
+        if let Ok(ref val) = lp_result {
+            if let Some(markdown) = val.get("markdown").and_then(|v| v.as_str()) {
+                if !markdown.is_empty() {
+                    return Ok(PageSnapshot {
+                        url,
+                        title,
+                        tree: markdown.to_string(),
+                        refs: HashMap::new(),
+                    });
+                }
+            }
+        }
+
+        // Fallback: JS-based accessibility tree extraction with @eN refs.
         let scope_selector = options.selector.as_deref().unwrap_or("document.body");
         let js = build_snapshot_js(scope_selector, options);
 
