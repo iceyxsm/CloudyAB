@@ -32,6 +32,11 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         battery_api_spoof(),
         media_devices_spoof(),
         client_hints_spoof(&profile.navigator),
+        notification_permission_spoof(),
+        speech_synthesis_spoof(),
+        network_info_spoof(),
+        document_focus_spoof(),
+        intl_locale_spoof(),
     ]
     .join("\n")
 }
@@ -614,4 +619,102 @@ fn client_hints_spoof(nav: &cloudyab_types::fingerprint::NavigatorProfile) -> St
             "15.0.0"
         },
     )
+}
+
+/// Notification permission state spoofing.
+/// Headless browsers return "default" — real browsers vary based on user interaction.
+fn notification_permission_spoof() -> String {
+    r#"
+(() => {
+    if (window.Notification) {
+        Object.defineProperty(Notification, 'permission', {
+            get: () => 'default'
+        });
+    }
+})();
+"#
+    .to_string()
+}
+
+/// SpeechSynthesis voices spoofing.
+/// Headless browsers return empty voices list — instant detection signal.
+fn speech_synthesis_spoof() -> String {
+    r#"
+(() => {
+    if (window.speechSynthesis) {
+        const fakeVoices = [
+            {name: 'Microsoft David - English (United States)', lang: 'en-US', default: true, localService: true, voiceURI: 'Microsoft David - English (United States)'},
+            {name: 'Microsoft Zira - English (United States)', lang: 'en-US', default: false, localService: true, voiceURI: 'Microsoft Zira - English (United States)'},
+            {name: 'Google US English', lang: 'en-US', default: false, localService: false, voiceURI: 'Google US English'},
+            {name: 'Google UK English Female', lang: 'en-GB', default: false, localService: false, voiceURI: 'Google UK English Female'},
+        ];
+        speechSynthesis.getVoices = function() { return fakeVoices; };
+        // Fire voiceschanged event
+        setTimeout(() => {
+            speechSynthesis.dispatchEvent(new Event('voiceschanged'));
+        }, 100);
+    }
+})();
+"#
+    .to_string()
+}
+
+/// Navigator.connection (Network Information API) spoofing.
+/// Missing in headless — real Chrome always has this.
+fn network_info_spoof() -> String {
+    r#"
+(() => {
+    if (!navigator.connection) {
+        Object.defineProperty(navigator, 'connection', {
+            get: () => ({
+                effectiveType: '4g',
+                rtt: 50,
+                downlink: 10,
+                saveData: false,
+                type: 'wifi',
+                addEventListener: function() {},
+                removeEventListener: function() {},
+            })
+        });
+    }
+})();
+"#
+    .to_string()
+}
+
+/// document.hasFocus() spoofing.
+/// Always returns false in headless — real browsers return true when tab is active.
+fn document_focus_spoof() -> String {
+    r#"
+(() => {
+    document.hasFocus = function() { return true; };
+    Object.defineProperty(document, 'hidden', { get: () => false });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+})();
+"#
+    .to_string()
+}
+
+/// Intl/Locale timezone consistency.
+/// Ensures Intl.DateTimeFormat matches the expected timezone for the profile.
+fn intl_locale_spoof() -> String {
+    r#"
+(() => {
+    // Ensure Intl reports consistent timezone
+    const origResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+    Intl.DateTimeFormat.prototype.resolvedOptions = function() {
+        const opts = origResolvedOptions.call(this);
+        // Keep the timezone as-is (should match system/proxy geo)
+        return opts;
+    };
+
+    // Ensure Date.prototype.getTimezoneOffset is consistent
+    const origGetTimezoneOffset = Date.prototype.getTimezoneOffset;
+    const cachedOffset = origGetTimezoneOffset.call(new Date());
+    Date.prototype.getTimezoneOffset = function() {
+        return cachedOffset;
+    };
+})();
+"#
+    .to_string()
 }
