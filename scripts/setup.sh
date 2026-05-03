@@ -53,78 +53,65 @@ log_info "Creating directories..."
 mkdir -p "$DATA_DIR" "$MODELS_DIR" "$OBSCURA_DIR"
 log_ok "Directories ready (data/, models/, bin/)"
 
-# Step 3: Check for browser binary — download if missing
+# Step 3: Check for browser binary — download Obscura if missing
 BROWSER_AVAILABLE=false
 if [ -n "${CLOUDYAB_BROWSER_BIN:-}" ] && [ -f "$CLOUDYAB_BROWSER_BIN" ]; then
     log_ok "Browser binary from env: $CLOUDYAB_BROWSER_BIN"
     BROWSER_AVAILABLE=true
 elif [ -f "$OBSCURA_BIN" ]; then
     chmod +x "$OBSCURA_BIN"
-    log_ok "Browser found at: $OBSCURA_BIN"
+    log_ok "Obscura found at: $OBSCURA_BIN"
     BROWSER_AVAILABLE=true
 else
-    log_info "Downloading stealth Chromium browser..."
+    log_info "Downloading Obscura headless browser..."
 
     OS_TYPE="$(uname -s)"
     ARCH="$(uname -m)"
+    OBSCURA_URL=""
 
-    if [ "$OS_TYPE" = "Linux" ]; then
-        if [ "$ARCH" = "x86_64" ]; then
-            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-linux64.zip"
-        else
-            log_err "Unsupported architecture: $ARCH (need x86_64)"
-            log_info "Continuing without browser..."
-        fi
+    if [ "$OS_TYPE" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
+        OBSCURA_URL="https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-linux.tar.gz"
+    elif [ "$OS_TYPE" = "Darwin" ] && [ "$ARCH" = "arm64" ]; then
+        OBSCURA_URL="https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-aarch64-macos.tar.gz"
     elif [ "$OS_TYPE" = "Darwin" ]; then
-        if [ "$ARCH" = "arm64" ]; then
-            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-mac-arm64.zip"
-        else
-            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-mac64.zip"
-        fi
+        OBSCURA_URL="https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-macos.tar.gz"
+    else
+        log_err "Unsupported platform: $OS_TYPE $ARCH"
     fi
 
-    if [ -n "${CHROMIUM_URL:-}" ]; then
-        DOWNLOAD_PATH="$OBSCURA_DIR/chromium.zip"
+    if [ -n "$OBSCURA_URL" ]; then
+        DOWNLOAD_PATH="$OBSCURA_DIR/obscura.tar.gz"
 
         if command -v curl &> /dev/null; then
-            curl -L -o "$DOWNLOAD_PATH" "$CHROMIUM_URL" 2>/dev/null
+            curl -L -o "$DOWNLOAD_PATH" "$OBSCURA_URL"
         elif command -v wget &> /dev/null; then
-            wget -q -O "$DOWNLOAD_PATH" "$CHROMIUM_URL"
+            wget -q -O "$DOWNLOAD_PATH" "$OBSCURA_URL"
         else
-            log_err "Neither curl nor wget found. Cannot download browser."
-            log_info "Continuing without browser..."
+            log_err "Neither curl nor wget found. Cannot download Obscura."
         fi
 
         if [ -f "$DOWNLOAD_PATH" ]; then
-            log_info "Extracting browser..."
-            unzip -q -o "$DOWNLOAD_PATH" -d "$OBSCURA_DIR" 2>/dev/null
+            log_info "Extracting Obscura..."
+            tar xzf "$DOWNLOAD_PATH" -C "$OBSCURA_DIR"
+            rm -f "$DOWNLOAD_PATH"
 
-            # Find the chromium binary in extracted files
-            FOUND_BIN=$(find "$OBSCURA_DIR" -name "chromium" -o -name "chrome" -o -name "Chromium" | head -1)
-            if [ -n "$FOUND_BIN" ]; then
-                cp "$FOUND_BIN" "$OBSCURA_BIN"
+            # Find the obscura binary
+            if [ -f "$OBSCURA_DIR/obscura" ]; then
+                chmod +x "$OBSCURA_DIR/obscura"
+                BROWSER_AVAILABLE=true
+                log_ok "Obscura installed at: $OBSCURA_DIR/obscura"
+            elif [ -f "$OBSCURA_BIN" ]; then
                 chmod +x "$OBSCURA_BIN"
                 BROWSER_AVAILABLE=true
-                log_ok "Browser installed at: $OBSCURA_BIN"
-            else
-                # Try common paths
-                if [ -f "$OBSCURA_DIR/chrome-linux64/chrome" ]; then
-                    cp "$OBSCURA_DIR/chrome-linux64/chrome" "$OBSCURA_BIN"
-                    chmod +x "$OBSCURA_BIN"
-                    BROWSER_AVAILABLE=true
-                    log_ok "Browser installed at: $OBSCURA_BIN"
-                fi
+                log_ok "Obscura installed at: $OBSCURA_BIN"
             fi
-
-            rm -f "$DOWNLOAD_PATH"
-            # Clean up extracted dirs but keep the binary
-            find "$OBSCURA_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
         fi
     fi
 
     if [ "$BROWSER_AVAILABLE" = false ]; then
-        log_warn "Could not auto-install browser."
-        echo "  Place a Chromium-compatible binary at: $OBSCURA_BIN"
+        log_warn "Could not auto-install Obscura."
+        echo "  Download manually from: https://github.com/h4ckf0r0day/obscura/releases"
+        echo "  Place binary at: $OBSCURA_BIN"
         log_info "Continuing without browser (HTTP stealth layer only)..."
     fi
 fi

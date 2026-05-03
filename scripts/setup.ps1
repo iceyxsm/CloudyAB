@@ -50,7 +50,7 @@ New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ObscuraDir | Out-Null
 Log-Ok "Directories ready (data/, models/, bin/)"
 
-# Step 3: Check for browser binary — download if missing
+# Step 3: Check for browser binary — download Obscura if missing
 $BrowserAvailable = $false
 $envBin = $env:CLOUDYAB_BROWSER_BIN
 
@@ -58,44 +58,43 @@ if ($envBin -and (Test-Path $envBin)) {
     Log-Ok "Browser binary from env: $envBin"
     $BrowserAvailable = $true
 } elseif (Test-Path $ObscuraBin) {
-    Log-Ok "Browser found at: $ObscuraBin"
+    Log-Ok "Obscura found at: $ObscuraBin"
     $BrowserAvailable = $true
 } else {
-    Log-Info "Downloading stealth Chromium browser..."
+    Log-Info "Downloading Obscura headless browser..."
 
-    $ChromiumUrl = "https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-win64.zip"
-    $DownloadPath = Join-Path $ObscuraDir "chromium.zip"
+    $ObscuraUrl = "https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-windows.zip"
+    $DownloadPath = Join-Path $ObscuraDir "obscura.zip"
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $ChromiumUrl -OutFile $DownloadPath -UseBasicParsing
-        Log-Info "Extracting browser..."
+        Invoke-WebRequest -Uri $ObscuraUrl -OutFile $DownloadPath -UseBasicParsing
+        Log-Info "Extracting Obscura..."
 
         Expand-Archive -Path $DownloadPath -DestinationPath $ObscuraDir -Force
 
-        # Find chrome.exe in extracted files
-        $foundBin = Get-ChildItem -Path $ObscuraDir -Recurse -Filter "chrome.exe" | Select-Object -First 1
-        if (-not $foundBin) {
-            $foundBin = Get-ChildItem -Path $ObscuraDir -Recurse -Filter "chromium.exe" | Select-Object -First 1
-        }
-
+        # Find obscura.exe in extracted files
+        $foundBin = Get-ChildItem -Path $ObscuraDir -Recurse -Filter "obscura.exe" | Select-Object -First 1
         if ($foundBin) {
-            Copy-Item $foundBin.FullName $ObscuraBin -Force
+            if ($foundBin.FullName -ne $ObscuraBin) {
+                Copy-Item $foundBin.FullName $ObscuraBin -Force
+            }
             $BrowserAvailable = $true
-            Log-Ok "Browser installed at: $ObscuraBin"
+            Log-Ok "Obscura installed at: $ObscuraBin"
         }
 
-        # Clean up zip and extracted dirs
+        # Clean up zip
         Remove-Item $DownloadPath -Force -ErrorAction SilentlyContinue
+        # Clean up extracted subdirs (keep only the binary)
         Get-ChildItem -Path $ObscuraDir -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
-        Log-Warn "Browser download failed: $_"
-        Log-Info "Continuing without browser (HTTP stealth layer only)..."
+        Log-Warn "Obscura download failed: $_"
     }
 
     if (-not $BrowserAvailable) {
-        Log-Warn "Could not auto-install browser."
-        Write-Host "  Place a Chromium-compatible binary at: $ObscuraBin"
+        Log-Warn "Could not auto-install Obscura."
+        Write-Host "  Download manually from: https://github.com/h4ckf0r0day/obscura/releases"
+        Write-Host "  Place binary at: $ObscuraBin"
         Log-Info "Continuing without browser (HTTP stealth layer only)..."
     }
 }
