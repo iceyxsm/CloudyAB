@@ -22,9 +22,13 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 mod ai_browse;
 mod cookie_adapter;
+#[allow(unused)]
+mod interaction;
 mod profiles;
 mod solver_adapter;
 mod task_queue;
+#[allow(unused)]
+mod task_store;
 mod tools;
 
 use tools::CloudyAbServer;
