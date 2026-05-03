@@ -41,6 +41,7 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         chrome_app_spoof(),
         image_dimensions_spoof(),
         web_worker_consistency(),
+        iframe_contentwindow_spoof(),
     ]
     .join("\n")
 }
@@ -865,6 +866,55 @@ fn web_worker_consistency() -> String {
     };
     window.Worker.prototype = origWorker.prototype;
     Object.defineProperty(window.Worker, 'length', { value: 1 });
+})();
+"#
+    .to_string()
+}
+
+/// Iframe contentWindow leak prevention.
+/// Cross-origin iframes can expose real navigator/screen values.
+/// This patches iframe creation to propagate spoofed values.
+fn iframe_contentwindow_spoof() -> String {
+    r#"
+(() => {
+    const origCreateElement = document.createElement.bind(document);
+    document.createElement = function(tag) {
+        const el = origCreateElement(tag);
+        if (tag.toLowerCase() === 'iframe') {
+            const origAppend = el.appendChild;
+            // When iframe loads, try to patch its contentWindow
+            el.addEventListener('load', function() {
+                try {
+                    const win = el.contentWindow;
+                    if (win && win.navigator) {
+                        Object.defineProperty(win.navigator, 'userAgent', {
+                            get: () => navigator.userAgent
+                        });
+                        Object.defineProperty(win.navigator, 'platform', {
+                            get: () => navigator.platform
+                        });
+                        Object.defineProperty(win.navigator, 'languages', {
+                            get: () => navigator.languages
+                        });
+                        Object.defineProperty(win.navigator, 'hardwareConcurrency', {
+                            get: () => navigator.hardwareConcurrency
+                        });
+                        if (win.screen) {
+                            Object.defineProperty(win.screen, 'width', {
+                                get: () => screen.width
+                            });
+                            Object.defineProperty(win.screen, 'height', {
+                                get: () => screen.height
+                            });
+                        }
+                    }
+                } catch(e) {
+                    // Cross-origin iframes will throw — that's expected
+                }
+            });
+        }
+        return el;
+    };
 })();
 "#
     .to_string()

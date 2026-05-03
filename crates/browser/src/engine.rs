@@ -152,6 +152,9 @@ impl BrowserEngine {
         let _ = self.session_call("Page.enable", json!({})).await;
         let _ = self.session_call("Network.enable", json!({})).await;
 
+        // Simulate mouse presence before navigation (WAFs check for early mouse events)
+        self.simulate_pre_navigation_mouse().await;
+
         // Navigate to the actual URL
         self.session_call("Page.navigate", json!({ "url": url }))
             .await
@@ -265,6 +268,58 @@ impl BrowserEngine {
         // Simulate human mouse movement while waiting for challenge to resolve
         self.simulate_human_during_challenge(check_js, max_wait, start)
             .await;
+    }
+
+    /// Simulate mouse presence before navigation begins.
+    /// WAFs check for mouse events from the very start of page load.
+    /// This dispatches a short Bézier movement on the about:blank page
+    /// so the mouse is already "on screen" when the real page loads.
+    async fn simulate_pre_navigation_mouse(&self) {
+        use rand::Rng;
+
+        let vw = self.config.viewport_width as f64;
+        let vh = self.config.viewport_height as f64;
+
+        // Pre-generate a short movement path
+        let (start_x, start_y, end_x, end_y, cp1_t, cp2_t) = {
+            let mut rng = rand::thread_rng();
+            (
+                vw * rng.gen_range(0.3..0.5),
+                vh * rng.gen_range(0.3..0.5),
+                vw * rng.gen_range(0.4..0.7),
+                vh * rng.gen_range(0.4..0.7),
+                rng.gen_range(0.2..0.5),
+                rng.gen_range(0.5..0.8),
+            )
+        };
+
+        let cp1_x = start_x + (end_x - start_x) * cp1_t;
+        let cp1_y = start_y + (end_y - start_y) * 0.2;
+        let cp2_x = start_x + (end_x - start_x) * cp2_t;
+        let cp2_y = start_y + (end_y - start_y) * 0.8;
+
+        // Dispatch 8 mouse move events (quick, natural entry)
+        for i in 0..=8 {
+            let t = i as f64 / 8.0;
+            let mt = 1.0 - t;
+            let x = mt.powi(3) * start_x
+                + 3.0 * mt.powi(2) * t * cp1_x
+                + 3.0 * mt * t.powi(2) * cp2_x
+                + t.powi(3) * end_x;
+            let y = mt.powi(3) * start_y
+                + 3.0 * mt.powi(2) * t * cp1_y
+                + 3.0 * mt * t.powi(2) * cp2_y
+                + t.powi(3) * end_y;
+
+            let _ = self
+                .session_call(
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": x as i32, "y": y as i32 }),
+                )
+                .await;
+
+            tokio::time::sleep(Duration::from_millis(20 + (t * 15.0) as u64)).await;
+        }
     }
 
     /// Simulate human-like behavior during a challenge wait.
