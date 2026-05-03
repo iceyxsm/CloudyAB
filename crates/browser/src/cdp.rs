@@ -109,11 +109,7 @@ impl CdpClient {
     ///
     /// Returns the `result` field from the CDP response, or an error if the
     /// call times out or the server returns an error object.
-    pub async fn call(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, CdpError> {
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, CdpError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         let msg = serde_json::json!({
@@ -122,8 +118,8 @@ impl CdpClient {
             "params": params,
         });
 
-        let text = serde_json::to_string(&msg)
-            .map_err(|e| CdpError::Serialization(e.to_string()))?;
+        let text =
+            serde_json::to_string(&msg).map_err(|e| CdpError::Serialization(e.to_string()))?;
 
         let (tx, rx) = oneshot::channel();
 
@@ -163,8 +159,8 @@ impl CdpClient {
             "params": params,
         });
 
-        let text = serde_json::to_string(&msg)
-            .map_err(|e| CdpError::Serialization(e.to_string()))?;
+        let text =
+            serde_json::to_string(&msg).map_err(|e| CdpError::Serialization(e.to_string()))?;
 
         self.sender
             .send(Message::Text(text))

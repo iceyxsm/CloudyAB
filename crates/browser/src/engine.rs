@@ -257,9 +257,7 @@ impl BrowserEngine {
             .cdp
             .call("DOM.getDocument", json!({ "depth": 0 }))
             .await
-            .map_err(|e| {
-                EngineError::ScreenshotFailed(format!("DOM.getDocument failed: {e}"))
-            })?;
+            .map_err(|e| EngineError::ScreenshotFailed(format!("DOM.getDocument failed: {e}")))?;
 
         let node_id = doc_result
             .get("root")
@@ -273,9 +271,7 @@ impl BrowserEngine {
             .cdp
             .call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
             .await
-            .map_err(|e| {
-                EngineError::ScreenshotFailed(format!("DOM.getOuterHTML failed: {e}"))
-            })?;
+            .map_err(|e| EngineError::ScreenshotFailed(format!("DOM.getOuterHTML failed: {e}")))?;
 
         let html = html_result
             .get("outerHTML")
@@ -457,10 +453,26 @@ impl BrowsingEngine for BrowserEngine {
         let cookies: Vec<Cookie> = cookies_arr
             .iter()
             .map(|c| Cookie {
-                name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                value: c.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                domain: c.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                path: c.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string(),
+                name: c
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                value: c
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                domain: c
+                    .get("domain")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                path: c
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("/")
+                    .to_string(),
                 expires: None,
                 secure: c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
                 http_only: c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false),
@@ -496,10 +508,7 @@ impl BrowsingEngine for BrowserEngine {
                 )
                 .await
                 .map_err(|e| {
-                    EngineError::CookieError(format!(
-                        "Failed to set cookie '{}': {e}",
-                        cookie.name
-                    ))
+                    EngineError::CookieError(format!("Failed to set cookie '{}': {e}", cookie.name))
                 })?;
         }
         Ok(())
@@ -677,11 +686,7 @@ return {{refs, tree: lines.join('\\n')}};
 }
 
 /// Parse the raw JSON result from the snapshot JavaScript into a PageSnapshot.
-fn parse_snapshot_result(
-    url: &str,
-    title: &str,
-    raw: &Value,
-) -> Result<PageSnapshot, EngineError> {
+fn parse_snapshot_result(url: &str, title: &str, raw: &Value) -> Result<PageSnapshot, EngineError> {
     let tree = raw
         .get("tree")
         .and_then(|v| v.as_str())

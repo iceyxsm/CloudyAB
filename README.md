@@ -221,20 +221,20 @@ Task request body:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              MCP Server (stdio)                  │
-│              HTTP Task Queue (:9222)             │
+│              MCP Server (stdio)                 │
+│              HTTP Task Queue (:9222)            │
 ├─────────────────────────────────────────────────┤
-│              Orchestrator (core)                 │
+│              Orchestrator (core)                │
 │         auto-escalation + captcha detect        │
 ├──────────────────┬──────────────────────────────┤
 │  Stealth HTTP    │    Obscura Browser (CDP)     │
 │  (Layer 1)       │    (Layer 2)                 │
 │  TLS spoofing    │    Built-in stealth          │
 │  JS challenges   │    Full JS rendering         │
-├──────────────────┴──────────────────────────────┤
+├──────────────────┴────────────────┬─────────────┤
 │  Captcha Solver  │  Cookie Store  │  Human Sim  │
 │  ONNX models     │  SQLite        │  Bézier     │
-└──────────────────┴──────────────────────────────┘
+└──────────────────┴────────────────┴─────────────┘
 ```
 
 ## Crate Structure
