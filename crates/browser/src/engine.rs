@@ -157,8 +157,12 @@ impl BrowserEngine {
             .await
             .map_err(|e| EngineError::Navigation(format!("Navigate failed: {e}")))?;
 
-        // Wait for load
+        // Wait for initial load
         self.wait_for_load().await?;
+
+        // Wait for challenge resolution (AWS WAF, Cloudflare) if detected.
+        // These challenges auto-redirect after JS execution completes.
+        self.wait_for_challenge_resolution().await;
 
         // Store as current target
         let mut guard = self.current_target.write().await;
@@ -217,6 +221,71 @@ impl BrowserEngine {
 
             tokio::time::sleep(poll_interval).await;
         }
+    }
+
+    /// Detect and wait for WAF/challenge interstitials to auto-resolve.
+    ///
+    /// AWS WAF, Cloudflare, and similar protections serve a JS challenge page
+    /// that auto-redirects after execution. This method polls the page content
+    /// and waits for the challenge to complete (URL change or challenge markers disappear).
+    async fn wait_for_challenge_resolution(&self) {
+        let check_js = r#"(() => {
+            const html = document.documentElement.innerHTML;
+            const isChallenge =
+                html.includes('AwsWafIntegration') ||
+                html.includes('cf-challenge') ||
+                html.includes('_cf_chl') ||
+                html.includes('challenge-platform') ||
+                html.includes('Just a moment') ||
+                (document.title === '' && html.includes('JavaScript is disabled'));
+            return isChallenge;
+        })()"#;
+
+        let max_wait = Duration::from_secs(15);
+        let poll_interval = Duration::from_millis(500);
+        let start = tokio::time::Instant::now();
+
+        // Check if current page is a challenge
+        let is_challenge = self
+            .session_call(
+                "Runtime.evaluate",
+                json!({ "expression": check_js, "returnByValue": true }),
+            )
+            .await
+            .ok()
+            .and_then(|v| v.get("result")?.get("value")?.as_bool())
+            .unwrap_or(false);
+
+        if !is_challenge {
+            return;
+        }
+
+        info!("Challenge interstitial detected, waiting for resolution...");
+
+        // Poll until challenge resolves or timeout
+        while start.elapsed() < max_wait {
+            tokio::time::sleep(poll_interval).await;
+
+            let still_challenge = self
+                .session_call(
+                    "Runtime.evaluate",
+                    json!({ "expression": check_js, "returnByValue": true }),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.get("result")?.get("value")?.as_bool())
+                .unwrap_or(false);
+
+            if !still_challenge {
+                info!("Challenge resolved successfully");
+                // Wait a bit more for the real page to fully load
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = self.wait_for_load().await;
+                return;
+            }
+        }
+
+        debug!("Challenge did not resolve within timeout, proceeding with current page");
     }
 
     /// Evaluate JavaScript on the current page and return the result.
