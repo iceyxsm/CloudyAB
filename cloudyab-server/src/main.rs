@@ -27,7 +27,6 @@ mod interaction;
 mod profiles;
 mod solver_adapter;
 mod task_queue;
-#[allow(unused)]
 mod task_store;
 mod tools;
 

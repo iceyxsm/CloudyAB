@@ -4,6 +4,7 @@
 //! On startup, pending/running tasks are recovered and re-queued.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
 use serde_json;
@@ -19,13 +20,18 @@ pub enum TaskStoreError {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("Lock poisoned")]
+    LockPoisoned,
 }
 
 /// SQLite-backed persistent task store.
+/// Uses a Mutex to make the non-Send Connection safe for async contexts.
 pub struct TaskStore {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
+#[allow(unused)]
 impl TaskStore {
     /// Open or create a task store at the given path.
     pub fn open(path: &Path) -> Result<Self, TaskStoreError> {
@@ -52,7 +58,9 @@ impl TaskStore {
         )?;
 
         info!(path = %path.display(), "Task store opened");
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// Save a task entry to the database (insert or update).
@@ -65,7 +73,8 @@ impl TaskStore {
             .transpose()?;
         let now = chrono::Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        conn.execute(
             "INSERT OR REPLACE INTO tasks
              (id, status, request_json, result_json, error, attempts, max_retries, created_at, completed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -88,7 +97,8 @@ impl TaskStore {
 
     /// Load a task by ID.
     pub fn load(&self, task_id: &str) -> Result<Option<TaskEntry>, TaskStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        let mut stmt = conn.prepare(
             "SELECT id, status, request_json, result_json, error, attempts, max_retries
              FROM tasks WHERE id = ?1",
         )?;
@@ -115,7 +125,8 @@ impl TaskStore {
 
     /// Load all tasks that were pending or running (for recovery on restart).
     pub fn load_recoverable(&self) -> Result<Vec<TaskEntry>, TaskStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        let mut stmt = conn.prepare(
             "SELECT id, status, request_json, result_json, error, attempts, max_retries
              FROM tasks WHERE status IN ('pending', 'running', 'retrying')
              ORDER BY created_at ASC",
@@ -146,7 +157,8 @@ impl TaskStore {
         status: &str,
         error: Option<&str>,
     ) -> Result<(), TaskStoreError> {
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        conn.execute(
             "UPDATE tasks SET status = ?1, error = ?2 WHERE id = ?3",
             params![status, error, task_id],
         )?;
@@ -155,11 +167,11 @@ impl TaskStore {
 
     /// Delete tasks older than the given number of seconds.
     pub fn cleanup_old(&self, max_age_secs: u64) -> Result<usize, TaskStoreError> {
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::seconds(max_age_secs as i64);
+        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(max_age_secs as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
-        let count = self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        let count = conn.execute(
             "DELETE FROM tasks
              WHERE status IN ('completed', 'failed', 'cancelled') AND created_at < ?1",
             params![cutoff_str],
@@ -173,9 +185,8 @@ impl TaskStore {
 
     /// Get total count of tasks by status.
     pub fn count_by_status(&self) -> Result<Vec<(String, usize)>, TaskStoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+        let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
+        let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
 
         let counts = stmt
             .query_map([], |row| {

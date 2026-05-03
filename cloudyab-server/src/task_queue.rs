@@ -10,6 +10,7 @@
 //! - Task TTL and automatic cleanup
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{info, warn};
 use uuid::Uuid;
+
+use crate::task_store::TaskStore;
 
 /// Task status values.
 const STATUS_PENDING: &str = "pending";
@@ -58,6 +61,7 @@ pub struct AppState {
     config: Arc<CloudyAbConfig>,
     http_client: Client,
     semaphore: Arc<Semaphore>,
+    store: Option<Arc<TaskStore>>,
 }
 
 /// A task entry stored in the queue.
@@ -157,6 +161,19 @@ pub fn build_router(
 ) -> Router {
     let max_concurrent = DEFAULT_MAX_CONCURRENT;
 
+    // Open SQLite task store for persistence
+    let store_path = PathBuf::from("data/tasks.db");
+    let store = match TaskStore::open(&store_path) {
+        Ok(s) => {
+            info!("Task persistence enabled");
+            Some(Arc::new(s))
+        }
+        Err(e) => {
+            warn!(error = %e, "Task persistence unavailable, running in-memory only");
+            None
+        }
+    };
+
     let state = AppState {
         orchestrator,
         tasks: Arc::new(RwLock::new(HashMap::new())),
@@ -166,7 +183,12 @@ pub fn build_router(
             .build()
             .unwrap_or_else(|_| Client::new()),
         semaphore: Arc::new(Semaphore::new(max_concurrent)),
+        store,
     };
+
+    // Recover tasks from store on startup
+    let recovery_state = state.clone();
+    tokio::spawn(recover_tasks(recovery_state));
 
     // Spawn background cleanup task
     let cleanup_state = state.clone();
@@ -233,7 +255,13 @@ async fn create_task(
 
     let position = {
         let mut tasks = state.tasks.write().await;
-        tasks.insert(task_id.clone(), entry);
+        tasks.insert(task_id.clone(), entry.clone());
+        // Persist to store on creation
+        if let Some(ref store) = state.store {
+            if let Err(e) = store.save(&entry) {
+                warn!(task_id = %task_id, error = %e, "Failed to persist new task");
+            }
+        }
         tasks
             .values()
             .filter(|t| t.status == STATUS_PENDING || t.status == STATUS_RUNNING)
@@ -525,7 +553,7 @@ async fn run_navigation(state: &AppState, request: &TaskRequest) -> Result<TaskR
     })
 }
 
-/// Update a task entry with a closure.
+/// Update a task entry with a closure, then persist to store.
 async fn update_task<F>(state: &AppState, task_id: &str, f: F)
 where
     F: FnOnce(&mut TaskEntry),
@@ -533,6 +561,12 @@ where
     let mut tasks = state.tasks.write().await;
     if let Some(entry) = tasks.get_mut(task_id) {
         f(entry);
+        // Persist to SQLite store if available
+        if let Some(ref store) = state.store {
+            if let Err(e) = store.save(entry) {
+                warn!(task_id, error = %e, "Failed to persist task state");
+            }
+        }
     }
 }
 
@@ -616,6 +650,51 @@ async fn cleanup_expired_tasks(state: AppState) {
         if removed > 0 {
             info!(removed, "Cleaned up expired tasks");
         }
+
+        // Also clean up the persistent store
+        if let Some(ref store) = state.store {
+            if let Err(e) = store.cleanup_old(TASK_TTL_SECS) {
+                warn!(error = %e, "Failed to clean up task store");
+            }
+        }
+    }
+}
+
+/// Recover pending/running tasks from the persistent store on startup.
+async fn recover_tasks(state: AppState) {
+    let store = match &state.store {
+        Some(s) => s,
+        None => return,
+    };
+
+    let recovered = match store.load_recoverable() {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!(error = %e, "Failed to recover tasks from store");
+            return;
+        }
+    };
+
+    if recovered.is_empty() {
+        return;
+    }
+
+    info!(count = recovered.len(), "Recovering tasks from persistent store");
+
+    for entry in recovered {
+        let task_id = entry.id.clone();
+        let request = entry.request.clone();
+        let max_retries = entry.max_retries;
+
+        {
+            let mut tasks = state.tasks.write().await;
+            tasks.insert(task_id.clone(), entry);
+        }
+
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            execute_with_retry(state_clone, task_id, request, max_retries).await;
+        });
     }
 }
 

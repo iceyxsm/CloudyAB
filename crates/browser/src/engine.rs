@@ -388,6 +388,17 @@ impl BrowsingEngine for BrowserEngine {
         Ok(())
     }
 
+    async fn evaluate_js(&self, js: &str) -> Result<serde_json::Value, EngineError> {
+        let page = self.active_page().await?;
+        let result: serde_json::Value = page
+            .evaluate(js.to_string())
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("JS evaluation failed: {e}")))?
+            .into_value()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(result)
+    }
+
     fn name(&self) -> &str {
         "obscura-browser"
     }

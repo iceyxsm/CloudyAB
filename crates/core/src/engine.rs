@@ -72,6 +72,15 @@ pub trait BrowsingEngine: Send + Sync {
         ))
     }
 
+    /// Execute arbitrary JavaScript on the current page and return the result.
+    /// Used by the server to inject human-like interaction sequences.
+    /// Default implementation returns an error (not supported by this engine).
+    async fn evaluate_js(&self, _js: &str) -> Result<serde_json::Value, EngineError> {
+        Err(EngineError::Internal(
+            "JS evaluation not supported by this engine".into(),
+        ))
+    }
+
     /// Name of this engine for logging.
     fn name(&self) -> &str;
 }
