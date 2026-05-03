@@ -14,13 +14,18 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         permissions_spoof(),
         plugins_spoof(),
         webgl_spoof(&profile.webgl.vendor, &profile.webgl.renderer),
-        canvas_noise(),
+        canvas_noise_stable(),
+        audio_context_spoof(),
+        font_enumeration_spoof(&profile.navigator.platform),
         screen_spoof(
             profile.screen.width,
             profile.screen.height,
             profile.screen.color_depth,
             profile.screen.pixel_ratio,
         ),
+        window_dimensions_spoof(profile.screen.width, profile.screen.height),
+        event_timing_spoof(),
+        native_function_masking(),
     ]
     .join("\n")
 }
@@ -129,20 +134,226 @@ WebGL2RenderingContext.prototype.getParameter = function(parameter) {{
     )
 }
 
-fn canvas_noise() -> String {
+/// Stable canvas noise injection with a per-session seed.
+/// The hash stays consistent within a session but differs between profiles.
+fn canvas_noise_stable() -> String {
     r#"
-const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-HTMLCanvasElement.prototype.toDataURL = function(type) {
-    const ctx = this.getContext('2d');
-    if (ctx) {
-        const imageData = ctx.getImageData(0, 0, this.width, this.height);
-        for (let i = 0; i < imageData.data.length; i += 4) {
-            imageData.data[i] ^= 1;
-        }
-        ctx.putImageData(imageData, 0, 0);
+(() => {
+    const seed = Math.floor(Math.random() * 2147483647);
+    function mulberry32(a) {
+        return function() {
+            a |= 0; a = a + 0x6D2B79F5 | 0;
+            let t = Math.imul(a ^ a >>> 15, 1 | a);
+            t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+            return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        };
     }
-    return originalToDataURL.apply(this, arguments);
-};
+    const rng = mulberry32(seed);
+
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+        const ctx = this.getContext('2d');
+        if (ctx && this.width > 0 && this.height > 0) {
+            const imageData = ctx.getImageData(0, 0, this.width, this.height);
+            const d = imageData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                d[i] = d[i] ^ (rng() < 0.1 ? 1 : 0);
+                d[i+1] = d[i+1] ^ (rng() < 0.1 ? 1 : 0);
+                d[i+2] = d[i+2] ^ (rng() < 0.1 ? 1 : 0);
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+        return origToDataURL.apply(this, arguments);
+    };
+
+    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+    CanvasRenderingContext2D.prototype.getImageData = function() {
+        const imageData = origGetImageData.apply(this, arguments);
+        const d = imageData.data;
+        for (let i = 0; i < d.length; i += 4) {
+            d[i] = d[i] ^ (rng() < 0.1 ? 1 : 0);
+            d[i+1] = d[i+1] ^ (rng() < 0.1 ? 1 : 0);
+            d[i+2] = d[i+2] ^ (rng() < 0.1 ? 1 : 0);
+        }
+        return imageData;
+    };
+})();
+"#
+    .to_string()
+}
+
+/// AudioContext fingerprint spoofing.
+/// Injects subtle noise into DynamicsCompressor and AnalyserNode output
+/// to produce a unique but stable audio fingerprint per session.
+fn audio_context_spoof() -> String {
+    r#"
+(() => {
+    const noiseSeed = Math.random() * 0.0001;
+
+    const origGetFloatFrequencyData = AnalyserNode.prototype.getFloatFrequencyData;
+    AnalyserNode.prototype.getFloatFrequencyData = function(array) {
+        origGetFloatFrequencyData.call(this, array);
+        for (let i = 0; i < array.length; i++) {
+            array[i] = array[i] + noiseSeed * (i % 7 - 3);
+        }
+    };
+
+    const origGetByteFrequencyData = AnalyserNode.prototype.getByteFrequencyData;
+    AnalyserNode.prototype.getByteFrequencyData = function(array) {
+        origGetByteFrequencyData.call(this, array);
+        for (let i = 0; i < array.length; i++) {
+            array[i] = Math.max(0, Math.min(255, array[i] + ((i * 7 + 3) % 5 - 2)));
+        }
+    };
+
+    const origGetChannelData = AudioBuffer.prototype.getChannelData;
+    AudioBuffer.prototype.getChannelData = function(channel) {
+        const data = origGetChannelData.call(this, channel);
+        for (let i = 0; i < data.length; i += 100) {
+            data[i] = data[i] + noiseSeed * 0.01;
+        }
+        return data;
+    };
+
+    const origCopyFromChannel = AudioBuffer.prototype.copyFromChannel;
+    AudioBuffer.prototype.copyFromChannel = function(dest, channel, start) {
+        origCopyFromChannel.call(this, dest, channel, start);
+        for (let i = 0; i < dest.length; i += 100) {
+            dest[i] = dest[i] + noiseSeed * 0.01;
+        }
+    };
+})();
+"#
+    .to_string()
+}
+
+/// Font enumeration spoofing.
+/// Returns a realistic font list matching the claimed OS platform.
+fn font_enumeration_spoof(platform: &str) -> String {
+    let fonts = if platform.contains("Mac") || platform.contains("mac") {
+        r#"[
+            "Arial","Courier New","Georgia","Helvetica","Helvetica Neue",
+            "Lucida Grande","Monaco","Palatino","Times","Times New Roman",
+            "Trebuchet MS","Verdana","American Typewriter","Avenir",
+            "Avenir Next","Futura","Geneva","Gill Sans","Menlo",
+            "Optima","San Francisco"
+        ]"#
+    } else {
+        r#"[
+            "Arial","Arial Black","Calibri","Cambria","Comic Sans MS",
+            "Consolas","Courier New","Georgia","Impact","Lucida Console",
+            "Microsoft Sans Serif","Palatino Linotype","Segoe UI",
+            "Tahoma","Times New Roman","Trebuchet MS","Verdana",
+            "Webdings","Wingdings"
+        ]"#
+    };
+
+    format!(
+        r#"
+(() => {{
+    const fakeFonts = {fonts};
+    const defaultWidth = {{}};
+    const testString = 'mmmmmmmmmmlli';
+    const testSize = '72px';
+    const baseFonts = ['monospace', 'sans-serif', 'serif'];
+    const span = document.createElement('span');
+    span.style.fontSize = testSize;
+    span.style.visibility = 'hidden';
+    span.style.position = 'absolute';
+    span.textContent = testString;
+
+    if (document.fonts && document.fonts.check) {{
+        const origCheck = document.fonts.check.bind(document.fonts);
+        document.fonts.check = function(font) {{
+            const family = font.split(',')[0].replace(/['"]/g, '').trim();
+            if (fakeFonts.some(f => f.toLowerCase() === family.toLowerCase())) {{
+                return true;
+            }}
+            return origCheck(font);
+        }};
+    }}
+}})();
+"#,
+        fonts = fonts,
+    )
+}
+
+/// Window dimensions consistency with screen values.
+/// Ensures innerWidth/innerHeight and outerWidth/outerHeight are consistent.
+fn window_dimensions_spoof(width: u32, height: u32) -> String {
+    let inner_height = height - 85; // Chrome toolbar + tab bar
+    let outer_height = height + 40; // Window chrome
+    format!(
+        r#"
+Object.defineProperty(window, 'innerWidth', {{get: () => {width}}});
+Object.defineProperty(window, 'innerHeight', {{get: () => {inner_height}}});
+Object.defineProperty(window, 'outerWidth', {{get: () => {width}}});
+Object.defineProperty(window, 'outerHeight', {{get: () => {outer_height}}});
+Object.defineProperty(document.documentElement, 'clientWidth', {{get: () => {width}}});
+Object.defineProperty(document.documentElement, 'clientHeight', {{get: () => {inner_height}}});
+"#,
+        width = width,
+        inner_height = inner_height,
+        outer_height = outer_height,
+    )
+}
+
+/// Reduce performance.now() precision to prevent timing-based fingerprinting.
+/// Chrome already does this (100μs precision) but headless may expose higher precision.
+fn event_timing_spoof() -> String {
+    r#"
+(() => {
+    const origNow = performance.now.bind(performance);
+    performance.now = function() {
+        return Math.round(origNow() * 10) / 10;
+    };
+
+    const origDateNow = Date.now;
+    Date.now = function() {
+        return Math.round(origDateNow() / 2) * 2;
+    };
+})();
+"#
+    .to_string()
+}
+
+/// Mask native function toString to prevent detection of overridden methods.
+/// Without this, calling `.toString()` on spoofed functions reveals the override.
+fn native_function_masking() -> String {
+    r#"
+(() => {
+    const origToString = Function.prototype.toString;
+    const nativePattern = /^function \w+\(\) \{ \[native code\] \}$/;
+    const overrides = new Set();
+
+    const handler = {
+        apply: function(target, thisArg, args) {
+            if (overrides.has(thisArg)) {
+                return `function ${thisArg.name || ''}() { [native code] }`;
+            }
+            return target.call(thisArg);
+        }
+    };
+
+    Function.prototype.toString = new Proxy(origToString, handler);
+    overrides.add(Function.prototype.toString);
+
+    // Mark all our overridden functions
+    const propsToMask = [
+        navigator.__lookupGetter__('userAgent'),
+        navigator.__lookupGetter__('platform'),
+        navigator.__lookupGetter__('languages'),
+        navigator.__lookupGetter__('hardwareConcurrency'),
+        navigator.__lookupGetter__('plugins'),
+        navigator.permissions.query,
+        HTMLCanvasElement.prototype.toDataURL,
+        CanvasRenderingContext2D.prototype.getImageData,
+        WebGLRenderingContext.prototype.getParameter,
+        performance.now,
+    ].filter(Boolean);
+
+    propsToMask.forEach(fn => overrides.add(fn));
+})();
 "#
     .to_string()
 }
