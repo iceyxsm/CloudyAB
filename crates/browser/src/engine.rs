@@ -192,12 +192,13 @@ impl BrowserEngine {
         }
     }
 
-    /// Wait for the page to finish loading (poll document.readyState).
+    /// Wait for the page to finish loading (poll document.readyState + network idle).
     async fn wait_for_load(&self) -> Result<(), EngineError> {
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let start = tokio::time::Instant::now();
         let poll_interval = Duration::from_millis(CDP_POLL_INTERVAL_MS);
 
+        // Phase 1: Wait for document.readyState == "complete" (not just "interactive")
         loop {
             if start.elapsed() > timeout {
                 return Err(EngineError::Timeout(self.config.timeout_secs));
@@ -217,13 +218,45 @@ impl BrowserEngine {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                if state == "complete" || state == "interactive" {
-                    return Ok(());
+                if state == "complete" {
+                    break;
                 }
             }
 
             tokio::time::sleep(poll_interval).await;
         }
+
+        // Phase 2: Wait for network idle (no pending XHR/fetch for 500ms).
+        // This ensures async WAF scripts have finished loading and executing.
+        let idle_threshold = Duration::from_millis(500);
+        let mut last_activity = tokio::time::Instant::now();
+
+        while start.elapsed() < timeout {
+            let pending = self
+                .session_call(
+                    "Runtime.evaluate",
+                    json!({
+                        "expression": "performance.getEntriesByType('resource').filter(e => !e.responseEnd).length",
+                        "returnByValue": true,
+                    }),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.get("result")?.get("value")?.as_u64())
+                .unwrap_or(0);
+
+            if pending > 0 {
+                last_activity = tokio::time::Instant::now();
+            }
+
+            if last_activity.elapsed() >= idle_threshold {
+                return Ok(());
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Ok(())
     }
 
     /// Detect and wait for WAF/challenge interstitials to auto-resolve.
