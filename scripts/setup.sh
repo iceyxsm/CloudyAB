@@ -53,25 +53,80 @@ log_info "Creating directories..."
 mkdir -p "$DATA_DIR" "$MODELS_DIR" "$OBSCURA_DIR"
 log_ok "Directories ready (data/, models/, bin/)"
 
-# Step 3: Check for Obscura browser binary
+# Step 3: Check for browser binary — download if missing
 BROWSER_AVAILABLE=false
 if [ -n "${CLOUDYAB_BROWSER_BIN:-}" ] && [ -f "$CLOUDYAB_BROWSER_BIN" ]; then
     log_ok "Browser binary from env: $CLOUDYAB_BROWSER_BIN"
     BROWSER_AVAILABLE=true
 elif [ -f "$OBSCURA_BIN" ]; then
     chmod +x "$OBSCURA_BIN"
-    log_ok "Obscura browser found at: $OBSCURA_BIN"
+    log_ok "Browser found at: $OBSCURA_BIN"
     BROWSER_AVAILABLE=true
 else
-    log_warn "Obscura browser binary not found at: $OBSCURA_BIN"
-    echo ""
-    echo "  CloudyAB requires a stealth browser binary (Obscura or compatible)."
-    echo "  Options:"
-    echo "    1. Place binary at: $OBSCURA_BIN"
-    echo "    2. Set env: export CLOUDYAB_BROWSER_BIN=/path/to/browser"
-    echo "    3. Set in cloudyab.toml: browser.binary_path = \"/path/to/browser\""
-    echo ""
-    log_info "Continuing without browser (HTTP stealth layer only)..."
+    log_info "Downloading stealth Chromium browser..."
+
+    OS_TYPE="$(uname -s)"
+    ARCH="$(uname -m)"
+
+    if [ "$OS_TYPE" = "Linux" ]; then
+        if [ "$ARCH" = "x86_64" ]; then
+            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-linux64.zip"
+        else
+            log_err "Unsupported architecture: $ARCH (need x86_64)"
+            log_info "Continuing without browser..."
+        fi
+    elif [ "$OS_TYPE" = "Darwin" ]; then
+        if [ "$ARCH" = "arm64" ]; then
+            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-mac-arm64.zip"
+        else
+            CHROMIUM_URL="https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-mac64.zip"
+        fi
+    fi
+
+    if [ -n "${CHROMIUM_URL:-}" ]; then
+        DOWNLOAD_PATH="$OBSCURA_DIR/chromium.zip"
+
+        if command -v curl &> /dev/null; then
+            curl -L -o "$DOWNLOAD_PATH" "$CHROMIUM_URL" 2>/dev/null
+        elif command -v wget &> /dev/null; then
+            wget -q -O "$DOWNLOAD_PATH" "$CHROMIUM_URL"
+        else
+            log_err "Neither curl nor wget found. Cannot download browser."
+            log_info "Continuing without browser..."
+        fi
+
+        if [ -f "$DOWNLOAD_PATH" ]; then
+            log_info "Extracting browser..."
+            unzip -q -o "$DOWNLOAD_PATH" -d "$OBSCURA_DIR" 2>/dev/null
+
+            # Find the chromium binary in extracted files
+            FOUND_BIN=$(find "$OBSCURA_DIR" -name "chromium" -o -name "chrome" -o -name "Chromium" | head -1)
+            if [ -n "$FOUND_BIN" ]; then
+                cp "$FOUND_BIN" "$OBSCURA_BIN"
+                chmod +x "$OBSCURA_BIN"
+                BROWSER_AVAILABLE=true
+                log_ok "Browser installed at: $OBSCURA_BIN"
+            else
+                # Try common paths
+                if [ -f "$OBSCURA_DIR/chrome-linux64/chrome" ]; then
+                    cp "$OBSCURA_DIR/chrome-linux64/chrome" "$OBSCURA_BIN"
+                    chmod +x "$OBSCURA_BIN"
+                    BROWSER_AVAILABLE=true
+                    log_ok "Browser installed at: $OBSCURA_BIN"
+                fi
+            fi
+
+            rm -f "$DOWNLOAD_PATH"
+            # Clean up extracted dirs but keep the binary
+            find "$OBSCURA_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
+        fi
+    fi
+
+    if [ "$BROWSER_AVAILABLE" = false ]; then
+        log_warn "Could not auto-install browser."
+        echo "  Place a Chromium-compatible binary at: $OBSCURA_BIN"
+        log_info "Continuing without browser (HTTP stealth layer only)..."
+    fi
 fi
 
 # Step 4: Generate config if missing

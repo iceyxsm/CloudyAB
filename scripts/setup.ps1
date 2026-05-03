@@ -50,7 +50,7 @@ New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $ObscuraDir | Out-Null
 Log-Ok "Directories ready (data/, models/, bin/)"
 
-# Step 3: Check for Obscura browser binary
+# Step 3: Check for browser binary — download if missing
 $BrowserAvailable = $false
 $envBin = $env:CLOUDYAB_BROWSER_BIN
 
@@ -58,18 +58,46 @@ if ($envBin -and (Test-Path $envBin)) {
     Log-Ok "Browser binary from env: $envBin"
     $BrowserAvailable = $true
 } elseif (Test-Path $ObscuraBin) {
-    Log-Ok "Obscura browser found at: $ObscuraBin"
+    Log-Ok "Browser found at: $ObscuraBin"
     $BrowserAvailable = $true
 } else {
-    Log-Warn "Obscura browser binary not found at: $ObscuraBin"
-    Write-Host ""
-    Write-Host "  CloudyAB requires a stealth browser binary (Obscura or compatible)."
-    Write-Host "  Options:"
-    Write-Host "    1. Place binary at: $ObscuraBin"
-    Write-Host "    2. Set env: `$env:CLOUDYAB_BROWSER_BIN = 'C:\path\to\browser.exe'"
-    Write-Host "    3. Set in cloudyab.toml: browser.binary_path = 'C:\path\to\browser.exe'"
-    Write-Host ""
-    Log-Info "Continuing without browser (HTTP stealth layer only)..."
+    Log-Info "Downloading stealth Chromium browser..."
+
+    $ChromiumUrl = "https://github.com/nicehash/nicehash-chromium/releases/latest/download/chromium-win64.zip"
+    $DownloadPath = Join-Path $ObscuraDir "chromium.zip"
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $ChromiumUrl -OutFile $DownloadPath -UseBasicParsing
+        Log-Info "Extracting browser..."
+
+        Expand-Archive -Path $DownloadPath -DestinationPath $ObscuraDir -Force
+
+        # Find chrome.exe in extracted files
+        $foundBin = Get-ChildItem -Path $ObscuraDir -Recurse -Filter "chrome.exe" | Select-Object -First 1
+        if (-not $foundBin) {
+            $foundBin = Get-ChildItem -Path $ObscuraDir -Recurse -Filter "chromium.exe" | Select-Object -First 1
+        }
+
+        if ($foundBin) {
+            Copy-Item $foundBin.FullName $ObscuraBin -Force
+            $BrowserAvailable = $true
+            Log-Ok "Browser installed at: $ObscuraBin"
+        }
+
+        # Clean up zip and extracted dirs
+        Remove-Item $DownloadPath -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $ObscuraDir -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Log-Warn "Browser download failed: $_"
+        Log-Info "Continuing without browser (HTTP stealth layer only)..."
+    }
+
+    if (-not $BrowserAvailable) {
+        Log-Warn "Could not auto-install browser."
+        Write-Host "  Place a Chromium-compatible binary at: $ObscuraBin"
+        Log-Info "Continuing without browser (HTTP stealth layer only)..."
+    }
 }
 
 # Step 4: Generate config if missing
