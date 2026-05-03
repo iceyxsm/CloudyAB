@@ -226,8 +226,9 @@ impl BrowserEngine {
     /// Detect and wait for WAF/challenge interstitials to auto-resolve.
     ///
     /// AWS WAF, Cloudflare, and similar protections serve a JS challenge page
-    /// that auto-redirects after execution. This method polls the page content
-    /// and waits for the challenge to complete (URL change or challenge markers disappear).
+    /// that auto-redirects after execution. This method polls the page content,
+    /// dispatches human-like mouse movements (to pass behavioral checks), and
+    /// waits for the challenge to complete.
     async fn wait_for_challenge_resolution(&self) {
         let check_js = r#"(() => {
             const html = document.documentElement.innerHTML;
@@ -242,7 +243,6 @@ impl BrowserEngine {
         })()"#;
 
         let max_wait = Duration::from_secs(15);
-        let poll_interval = Duration::from_millis(500);
         let start = tokio::time::Instant::now();
 
         // Check if current page is a challenge
@@ -260,12 +260,90 @@ impl BrowserEngine {
             return;
         }
 
-        info!("Challenge interstitial detected, waiting for resolution...");
+        info!("Challenge interstitial detected, simulating user behavior...");
 
-        // Poll until challenge resolves or timeout
-        while start.elapsed() < max_wait {
-            tokio::time::sleep(poll_interval).await;
+        // Simulate human mouse movement while waiting for challenge to resolve
+        self.simulate_human_during_challenge(check_js, max_wait, start)
+            .await;
+    }
 
+    /// Simulate human-like behavior during a challenge wait.
+    /// Moves the mouse in Bézier curves via Input.dispatchMouseEvent to appear human.
+    async fn simulate_human_during_challenge(
+        &self,
+        check_js: &str,
+        max_wait: Duration,
+        start: tokio::time::Instant,
+    ) {
+        use rand::Rng;
+
+        let vw = self.config.viewport_width as f64;
+        let vh = self.config.viewport_height as f64;
+
+        // Pre-generate all random movement data (thread_rng is not Send)
+        let movements: Vec<(f64, f64, f64, f64, f64, f64, u64)> = {
+            let mut rng = rand::thread_rng();
+            (0..20)
+                .map(|_| {
+                    (
+                        vw * rng.gen_range(0.1..0.9),
+                        vh * rng.gen_range(0.1..0.9),
+                        rng.gen_range(0.2..0.5),
+                        rng.gen_range(0.0..0.3),
+                        rng.gen_range(0.5..0.8),
+                        rng.gen_range(0.7..1.0),
+                        rng.gen_range(300..900),
+                    )
+                })
+                .collect()
+        };
+
+        let mut cur_x = vw * 0.5;
+        let mut cur_y = vh * 0.5;
+
+        for (tgt_x, tgt_y, cp1_t, cp1_off, cp2_t, cp2_off, pause_ms) in &movements {
+            if start.elapsed() >= max_wait {
+                break;
+            }
+
+            let cp1_x = cur_x + (tgt_x - cur_x) * cp1_t;
+            let cp1_y = cur_y + (tgt_y - cur_y) * cp1_off;
+            let cp2_x = cur_x + (tgt_x - cur_x) * cp2_t;
+            let cp2_y = cur_y + (tgt_y - cur_y) * cp2_off;
+
+            // Dispatch 12 intermediate points along the Bézier curve
+            for i in 1..=12 {
+                let t = i as f64 / 12.0;
+                let mt = 1.0 - t;
+                let x = mt.powi(3) * cur_x
+                    + 3.0 * mt.powi(2) * t * cp1_x
+                    + 3.0 * mt * t.powi(2) * cp2_x
+                    + t.powi(3) * tgt_x;
+                let y = mt.powi(3) * cur_y
+                    + 3.0 * mt.powi(2) * t * cp1_y
+                    + 3.0 * mt * t.powi(2) * cp2_y
+                    + t.powi(3) * tgt_y;
+
+                let _ = self
+                    .session_call(
+                        "Input.dispatchMouseEvent",
+                        json!({
+                            "type": "mouseMoved",
+                            "x": x as i32,
+                            "y": y as i32,
+                        }),
+                    )
+                    .await;
+
+                let speed = 1.0 - (2.0 * t - 1.0).powi(2);
+                let delay_ms = 15.0 + speed * 25.0;
+                tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+            }
+
+            cur_x = *tgt_x;
+            cur_y = *tgt_y;
+
+            // Check if challenge resolved
             let still_challenge = self
                 .session_call(
                     "Runtime.evaluate",
@@ -277,12 +355,13 @@ impl BrowserEngine {
                 .unwrap_or(false);
 
             if !still_challenge {
-                info!("Challenge resolved successfully");
-                // Wait a bit more for the real page to fully load
+                info!("Challenge resolved after human simulation");
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let _ = self.wait_for_load().await;
                 return;
             }
+
+            tokio::time::sleep(Duration::from_millis(*pause_ms)).await;
         }
 
         debug!("Challenge did not resolve within timeout, proceeding with current page");
