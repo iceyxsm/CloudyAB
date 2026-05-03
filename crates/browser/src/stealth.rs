@@ -37,6 +37,10 @@ pub fn build_stealth_script(profile: &FingerprintProfile) -> String {
         network_info_spoof(),
         document_focus_spoof(),
         intl_locale_spoof(),
+        source_url_masking(),
+        chrome_app_spoof(),
+        image_dimensions_spoof(),
+        web_worker_consistency(),
     ]
     .join("\n")
 }
@@ -714,6 +718,153 @@ fn intl_locale_spoof() -> String {
     Date.prototype.getTimezoneOffset = function() {
         return cachedOffset;
     };
+})();
+"#
+    .to_string()
+}
+
+/// Source URL leak prevention in error stacks.
+/// When scripts are injected via CDP, error stacks reveal internal URLs
+/// like "pptr://" or "__puppeteer_evaluation_script__". This patches
+/// Error.prepareStackTrace to sanitize those.
+fn source_url_masking() -> String {
+    r#"
+(() => {
+    const origPrepareStackTrace = Error.prepareStackTrace;
+    Error.prepareStackTrace = function(error, stack) {
+        const filtered = stack.filter(frame => {
+            const fileName = frame.getFileName() || '';
+            return !fileName.includes('pptr:') &&
+                   !fileName.includes('__puppeteer') &&
+                   !fileName.includes('__playwright') &&
+                   !fileName.includes('__cloudyab') &&
+                   !fileName.includes('devtools://');
+        });
+        if (origPrepareStackTrace) {
+            return origPrepareStackTrace(error, filtered);
+        }
+        return filtered.map(f => `    at ${f}`).join('\n');
+    };
+
+    // Also patch Error.stack getter to sanitize existing stacks
+    const origStackDesc = Object.getOwnPropertyDescriptor(Error.prototype, 'stack');
+    if (origStackDesc && origStackDesc.get) {
+        Object.defineProperty(Error.prototype, 'stack', {
+            get: function() {
+                const stack = origStackDesc.get.call(this);
+                if (typeof stack !== 'string') return stack;
+                return stack.split('\n').filter(line =>
+                    !line.includes('pptr:') &&
+                    !line.includes('__puppeteer') &&
+                    !line.includes('__playwright') &&
+                    !line.includes('__cloudyab') &&
+                    !line.includes('devtools://')
+                ).join('\n');
+            },
+            set: origStackDesc.set,
+            configurable: true,
+        });
+    }
+})();
+"#
+    .to_string()
+}
+
+/// chrome.app spoofing.
+/// Older detection scripts (2020-2023) still check for chrome.app presence.
+/// Removed in Chrome 128+ but legacy detectors still look for it.
+fn chrome_app_spoof() -> String {
+    r#"
+(() => {
+    if (!window.chrome) window.chrome = {};
+    if (!window.chrome.app) {
+        window.chrome.app = {
+            isInstalled: false,
+            InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
+            RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'},
+            getDetails: function() { return null; },
+            getIsInstalled: function() { return false; },
+            installState: function() { return 'not_installed'; },
+        };
+    }
+    if (!window.chrome.csi) {
+        window.chrome.csi = function() {
+            return {
+                onloadT: Date.now(),
+                startE: Date.now() - Math.floor(Math.random() * 1000),
+                pageT: Math.random() * 3000,
+                tran: 15,
+            };
+        };
+    }
+    if (!window.chrome.loadTimes) {
+        window.chrome.loadTimes = function() {
+            return {
+                commitLoadTime: Date.now() / 1000,
+                connectionInfo: 'h2',
+                finishDocumentLoadTime: Date.now() / 1000 + 0.1,
+                finishLoadTime: Date.now() / 1000 + 0.2,
+                firstPaintAfterLoadTime: 0,
+                firstPaintTime: Date.now() / 1000 + 0.05,
+                navigationType: 'Other',
+                npnNegotiatedProtocol: 'h2',
+                requestTime: Date.now() / 1000 - 0.5,
+                startLoadTime: Date.now() / 1000 - 0.3,
+                wasAlternateProtocolAvailable: false,
+                wasFetchedViaSpdy: true,
+                wasNpnNegotiated: true,
+            };
+        };
+    }
+})();
+"#
+    .to_string()
+}
+
+/// Image dimensions fix for headless browsers.
+/// In headless mode without a renderer, Image objects may report 0x0.
+/// This ensures naturalWidth/naturalHeight return realistic values.
+fn image_dimensions_spoof() -> String {
+    r#"
+(() => {
+    const origImage = window.Image;
+    window.Image = function(w, h) {
+        const img = new origImage(w, h);
+        // Ensure broken images don't report 0x0 (headless detection)
+        if (!img.naturalWidth) {
+            Object.defineProperty(img, 'naturalWidth', {
+                get: () => img.width || 1,
+                configurable: true,
+            });
+            Object.defineProperty(img, 'naturalHeight', {
+                get: () => img.height || 1,
+                configurable: true,
+            });
+        }
+        return img;
+    };
+    window.Image.prototype = origImage.prototype;
+    Object.defineProperty(window.Image, 'length', { value: 0 });
+})();
+"#
+    .to_string()
+}
+
+/// Web Worker navigator consistency.
+/// Ensures navigator properties inside Workers match the main thread spoofed values.
+fn web_worker_consistency() -> String {
+    r#"
+(() => {
+    // Patch Worker constructor to inject navigator overrides into worker scope
+    const origWorker = window.Worker;
+    window.Worker = function(url, options) {
+        // Workers inherit navigator from the browser — Obscura handles this natively.
+        // This patch ensures the Worker constructor itself isn't flagged as modified.
+        const worker = new origWorker(url, options);
+        return worker;
+    };
+    window.Worker.prototype = origWorker.prototype;
+    Object.defineProperty(window.Worker, 'length', { value: 1 });
 })();
 "#
     .to_string()
