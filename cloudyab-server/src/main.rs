@@ -90,6 +90,7 @@ async fn main() -> Result<()> {
                 timeout_secs: config.engine.timeout_secs,
                 user_data_dir: None,
                 proxy_url: config.proxy.as_ref().map(|p| p.url.clone()),
+                cdp_port: 9223,
             };
 
             match BrowserEngine::launch(browser_config, &fingerprint).await {

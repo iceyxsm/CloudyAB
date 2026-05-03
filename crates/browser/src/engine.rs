@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chromiumoxide::browser::{Browser, BrowserConfig as CdpBrowserConfig};
+use chromiumoxide::browser::Browser;
 use chromiumoxide::page::Page;
 use cloudyab_core::engine::{BrowsingEngine, DetectedChallenge, EngineError};
 use cloudyab_types::captcha::CaptchaSolution;
@@ -40,34 +40,50 @@ pub struct BrowserEngine {
 
 impl BrowserEngine {
     /// Launch a new browser engine instance with the given configuration and fingerprint.
+    /// Starts Obscura in serve mode and connects via CDP WebSocket.
     pub async fn launch(
         config: BrowserConfig,
         fingerprint: &FingerprintProfile,
     ) -> Result<Self, EngineError> {
-        info!("Launching browser engine");
+        info!("Launching Obscura browser engine");
 
         let binary_path = config.resolve_binary();
         let args = config.build_args();
 
-        let mut builder = CdpBrowserConfig::builder()
-            .chrome_executable(binary_path)
-            .viewport(None);
-
-        if config.headless {
-            builder = builder.arg("--headless=new");
-        }
-
+        // Start Obscura in serve mode as a child process
+        let mut cmd = tokio::process::Command::new(&binary_path);
         for arg in &args {
-            builder = builder.arg(arg);
+            cmd.arg(arg);
         }
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
-        let browser_config = builder.build().map_err(|e| {
-            EngineError::BrowserError(format!("Failed to build browser config: {e}"))
+        let child = cmd.spawn().map_err(|e| {
+            EngineError::BrowserError(format!(
+                "Failed to start Obscura at {}: {e}",
+                binary_path.display()
+            ))
         })?;
 
-        let (browser, mut handler) = Browser::launch(browser_config)
+        // Store child process handle so it gets killed on drop
+        let _child_handle = Arc::new(child);
+
+        // Wait for Obscura CDP server to be ready (poll WebSocket endpoint)
+        let ws_url = config.cdp_ws_url();
+        let ready = wait_for_cdp_ready(&ws_url, config.timeout_secs).await;
+        if !ready {
+            return Err(EngineError::BrowserError(format!(
+                "Obscura CDP server did not become ready at {ws_url} within {}s",
+                config.timeout_secs
+            )));
+        }
+
+        info!(ws_url = %ws_url, "Connecting to Obscura CDP server");
+
+        // Connect to the running Obscura instance via CDP WebSocket
+        let (browser, mut handler) = Browser::connect(&ws_url)
             .await
-            .map_err(|e| EngineError::BrowserError(format!("Failed to launch browser: {e}")))?;
+            .map_err(|e| EngineError::BrowserError(format!("Failed to connect to Obscura: {e}")))?;
 
         // Spawn the CDP event handler in the background
         tokio::spawn(async move {
@@ -685,4 +701,33 @@ fn build_coords_submit_js(container_js: &str, coords: &[(i32, i32)]) -> String {
     return true;
 }})()"#
     )
+}
+
+/// Poll interval when waiting for CDP server to become ready (ms).
+const CDP_POLL_INTERVAL_MS: u64 = 200;
+
+/// Wait for the Obscura CDP WebSocket server to become ready.
+/// Polls by attempting a TCP connection to the port.
+async fn wait_for_cdp_ready(ws_url: &str, timeout_secs: u64) -> bool {
+    use std::net::TcpStream;
+
+    // Extract host:port from ws://127.0.0.1:9223/devtools/browser
+    let addr = ws_url
+        .trim_start_matches("ws://")
+        .split('/')
+        .next()
+        .unwrap_or("127.0.0.1:9223");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+
+    while tokio::time::Instant::now() < deadline {
+        if TcpStream::connect(addr).is_ok() {
+            // Give Obscura a moment to fully initialize after port is open
+            tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
+    }
+
+    false
 }
