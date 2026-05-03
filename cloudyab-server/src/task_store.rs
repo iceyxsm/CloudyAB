@@ -70,7 +70,6 @@ impl TaskStore {
             .as_ref()
             .map(serde_json::to_string)
             .transpose()?;
-        let now = chrono::Utc::now().to_rfc3339();
 
         let conn = self.conn.lock().map_err(|_| TaskStoreError::LockPoisoned)?;
         conn.execute(
@@ -85,8 +84,8 @@ impl TaskStore {
                 entry.error,
                 entry.attempts,
                 entry.max_retries,
-                now,
-                entry.completed_at.map(|_| chrono::Utc::now().to_rfc3339()),
+                entry.created_at.to_rfc3339(),
+                entry.completed_at.map(|t| t.to_rfc3339()),
             ],
         )?;
 
@@ -227,7 +226,7 @@ impl RawTaskRow {
             error: self.error,
             attempts: self.attempts,
             max_retries: self.max_retries,
-            created_at: std::time::Instant::now(),
+            created_at: chrono::Utc::now(),
             completed_at: None,
         })
     }

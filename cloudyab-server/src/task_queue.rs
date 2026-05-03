@@ -19,6 +19,7 @@ use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::{delete, get, post};
 use axum::Router;
+use chrono::{DateTime, Utc};
 use cloudyab_core::config::CloudyAbConfig;
 use cloudyab_core::orchestrator::Orchestrator;
 use cloudyab_types::session::{Layer, SessionConfig};
@@ -74,10 +75,9 @@ pub struct TaskEntry {
     pub error: Option<String>,
     pub attempts: u32,
     pub max_retries: u32,
-    #[serde(with = "instant_serde")]
-    pub created_at: Instant,
-    #[serde(skip_serializing_if = "Option::is_none", with = "option_instant_serde")]
-    pub completed_at: Option<Instant>,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// Request body for creating a new task.
@@ -249,7 +249,7 @@ async fn create_task(
         error: None,
         attempts: 0,
         max_retries,
-        created_at: Instant::now(),
+        created_at: Utc::now(),
         completed_at: None,
     };
 
@@ -334,7 +334,7 @@ async fn cancel_task(
     match tasks.get_mut(&id) {
         Some(entry) if entry.status == STATUS_PENDING || entry.status == STATUS_RUNNING => {
             entry.status = STATUS_CANCELLED.to_string();
-            entry.completed_at = Some(Instant::now());
+            entry.completed_at = Some(Utc::now());
             Ok(Json(entry.clone()))
         }
         Some(_) => Err(StatusCode::CONFLICT),
@@ -470,7 +470,7 @@ async fn execute_with_retry(
                 update_task(&state, &task_id, |entry| {
                     entry.status = STATUS_COMPLETED.to_string();
                     entry.result = Some(task_result);
-                    entry.completed_at = Some(Instant::now());
+                    entry.completed_at = Some(Utc::now());
                 })
                 .await;
                 fire_webhook_with_retry(&state, &task_id, &request.webhook_url).await;
@@ -481,7 +481,7 @@ async fn execute_with_retry(
                     update_task(&state, &task_id, |entry| {
                         entry.status = STATUS_FAILED.to_string();
                         entry.error = Some(error_msg);
-                        entry.completed_at = Some(Instant::now());
+                        entry.completed_at = Some(Utc::now());
                     })
                     .await;
                     fire_webhook_with_retry(&state, &task_id, &request.webhook_url).await;
@@ -522,7 +522,13 @@ async fn run_navigation(state: &AppState, request: &TaskRequest) -> Result<TaskR
 
     let snapshot = if request.snapshot.unwrap_or(false) {
         let options = cloudyab_types::page::SnapshotOptions::default();
-        orchestrator.snapshot(&options).await.ok().map(|s| s.tree)
+        match orchestrator.snapshot(&options).await {
+            Ok(s) => Some(s.tree),
+            Err(e) => {
+                warn!(error = %e, "Snapshot generation failed");
+                None
+            }
+        }
     } else {
         None
     };
@@ -633,7 +639,7 @@ async fn cleanup_expired_tasks(state: AppState) {
     loop {
         interval.tick().await;
         let mut tasks = state.tasks.write().await;
-        let now = Instant::now();
+        let now = Utc::now();
         let before = tasks.len();
 
         tasks.retain(|_, entry| {
@@ -643,7 +649,8 @@ async fn cleanup_expired_tasks(state: AppState) {
             {
                 return true;
             }
-            now.duration_since(entry.created_at).as_secs() < TASK_TTL_SECS
+            let age = now.signed_duration_since(entry.created_at);
+            age.num_seconds() < TASK_TTL_SECS as i64
         });
 
         let removed = before - tasks.len();
@@ -698,53 +705,5 @@ async fn recover_tasks(state: AppState) {
         tokio::spawn(async move {
             execute_with_retry(state_clone, task_id, request, max_retries).await;
         });
-    }
-}
-
-/// Serde support for Instant (serialized as elapsed seconds since creation).
-mod instant_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::time::Instant;
-
-    pub fn serialize<S>(instant: &Instant, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let elapsed = instant.elapsed().as_secs();
-        elapsed.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Instant, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let _secs = u64::deserialize(deserializer)?;
-        Ok(Instant::now())
-    }
-}
-
-mod option_instant_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::time::Instant;
-
-    pub fn serialize<S>(instant: &Option<Instant>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match instant {
-            Some(i) => {
-                let elapsed = i.elapsed().as_secs();
-                Some(elapsed).serialize(serializer)
-            }
-            None => None::<u64>.serialize(serializer),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Instant>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let opt = Option::<u64>::deserialize(deserializer)?;
-        Ok(opt.map(|_| Instant::now()))
     }
 }
