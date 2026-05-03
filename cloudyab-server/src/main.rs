@@ -22,6 +22,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 mod ai_browse;
 mod cookie_adapter;
+mod human_submitter;
 #[allow(unused)]
 mod interaction;
 mod profiles;
@@ -112,6 +113,10 @@ async fn main() -> Result<()> {
         let adapter = solver_adapter::SolverRegistryAdapter::new(&config.solver.models_dir);
         orchestrator.set_solver(Arc::new(adapter));
         tracing::info!("Captcha solver registered");
+
+        // Register human-like solution submitter for natural interaction
+        orchestrator.set_solution_submitter(Arc::new(human_submitter::HumanSubmitter));
+        tracing::info!("Human-like solution submitter registered");
     }
 
     // Conditionally register cookie persistence

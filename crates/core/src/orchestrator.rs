@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 use crate::config::CloudyAbConfig;
 use crate::engine::{
     BrowsingEngine, CaptchaSolver, CookiePersistence, DetectedChallenge, EngineError,
+    SolutionSubmitter,
 };
 use crate::router::LayerRouter;
 
@@ -29,6 +30,8 @@ pub struct Orchestrator {
     browser_engine: Option<Arc<dyn BrowsingEngine>>,
     solver: Option<Arc<dyn CaptchaSolver>>,
     cookie_store: Option<Arc<dyn CookiePersistence>>,
+    /// Optional human-like solution submitter (overrides raw JS dispatch).
+    solution_submitter: Option<Arc<dyn SolutionSubmitter>>,
     config: CloudyAbConfig,
     /// Which engine is currently active (last used)
     active_layer: tokio::sync::RwLock<Option<Layer>>,
@@ -48,6 +51,7 @@ impl Orchestrator {
             browser_engine: None,
             solver: None,
             cookie_store: None,
+            solution_submitter: None,
             config,
             active_layer: tokio::sync::RwLock::new(None),
         }
@@ -75,6 +79,12 @@ impl Orchestrator {
     pub fn set_cookie_store(&mut self, store: Arc<dyn CookiePersistence>) {
         info!("Registered cookie persistence store");
         self.cookie_store = Some(store);
+    }
+
+    /// Register a human-like solution submitter (overrides raw JS dispatch).
+    pub fn set_solution_submitter(&mut self, submitter: Arc<dyn SolutionSubmitter>) {
+        info!("Registered human-like solution submitter");
+        self.solution_submitter = Some(submitter);
     }
 
     /// Navigate to a URL, handling layer routing and auto-escalation.
@@ -381,7 +391,15 @@ impl Orchestrator {
             // Submit the solution back to the page
             if let Some(ref solution) = result.solution {
                 let container = challenge.container_selector.as_deref();
-                match engine.submit_solution(solution, container).await {
+
+                // Use human-like submitter if registered, otherwise fall back to raw JS
+                let submit_result = if let Some(ref submitter) = self.solution_submitter {
+                    submitter.submit(engine.as_ref(), solution, container).await
+                } else {
+                    engine.submit_solution(solution, container).await
+                };
+
+                match submit_result {
                     Ok(()) => {
                         info!("Solution submitted to page successfully");
                         // Brief wait for page to process the solution

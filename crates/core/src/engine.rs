@@ -112,6 +112,23 @@ pub trait CookiePersistence: Send + Sync {
     fn load_for_domain(&self, domain: &str) -> Result<Vec<Cookie>, EngineError>;
 }
 
+/// Trait for human-like solution submission.
+///
+/// Implementations generate natural-looking interaction sequences (Bézier mouse,
+/// realistic typing) and submit them via the engine's `evaluate_js` method.
+/// This is injected into the orchestrator by the server binary.
+#[async_trait]
+pub trait SolutionSubmitter: Send + Sync {
+    /// Submit a captcha solution using human-like interaction.
+    /// The engine reference is provided so the submitter can call `evaluate_js`.
+    async fn submit(
+        &self,
+        engine: &dyn BrowsingEngine,
+        solution: &CaptchaSolution,
+        container_selector: Option<&str>,
+    ) -> Result<(), EngineError>;
+}
+
 /// Errors produced by engine operations.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
