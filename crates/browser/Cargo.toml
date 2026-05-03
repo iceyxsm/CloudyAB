@@ -16,5 +16,8 @@ tracing.workspace = true
 url.workspace = true
 async-trait.workspace = true
 futures.workspace = true
-chromiumoxide.workspace = true
+tokio-tungstenite.workspace = true
+http.workspace = true
 chrono.workspace = true
+base64.workspace = true
+hyper-render = { version = "0.2", default-features = false, features = ["png"] }

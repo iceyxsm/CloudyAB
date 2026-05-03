@@ -1,16 +1,14 @@
-//! Browser engine implementation via CDP (Chrome DevTools Protocol).
+//! Browser engine implementation via raw CDP WebSocket.
 //!
 //! Provides a high-level interface over a stealth-patched browser binary
-//! (Obscura or compatible). Handles page lifecycle, stealth injection,
-//! DOM interaction, and accessibility tree extraction.
+//! (Obscura or compatible). Uses our tolerant CDP client that gracefully
+//! handles Obscura's non-standard messages.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chromiumoxide::browser::Browser;
-use chromiumoxide::page::Page;
 use cloudyab_core::engine::{BrowsingEngine, DetectedChallenge, EngineError};
 use cloudyab_types::captcha::CaptchaSolution;
 use cloudyab_types::cookie::{Cookie, CookieJar, SameSite};
@@ -19,39 +17,42 @@ use cloudyab_types::page::{
     ElementRef, PageSnapshot, SnapshotOptions, CONTENT_ROLES, INTERACTIVE_ROLES,
 };
 use cloudyab_types::session::{Layer, NavigationResult, SessionConfig};
-use futures::StreamExt;
+use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::cdp::CdpClient;
 use crate::challenge;
 use crate::config::BrowserConfig;
 use crate::stealth::build_stealth_script;
 
+/// Poll interval when waiting for CDP server to become ready (ms).
+const CDP_POLL_INTERVAL_MS: u64 = 200;
+
 /// The full browser engine (Layer 2).
 ///
-/// Uses a CDP-compatible browser binary for full page rendering with
-/// JavaScript execution, stealth features, and DOM access.
+/// Uses a raw CDP WebSocket client connected to Obscura. Tolerates
+/// non-standard messages that would crash chromiumoxide.
 pub struct BrowserEngine {
-    browser: Browser,
-    page: RwLock<Option<Arc<Page>>>,
+    cdp: Arc<CdpClient>,
+    current_target: RwLock<Option<String>>,
     stealth_script: String,
     config: BrowserConfig,
+    _child: Arc<tokio::process::Child>,
 }
 
 impl BrowserEngine {
     /// Launch a new browser engine instance with the given configuration and fingerprint.
-    /// Starts Obscura in serve mode and connects via CDP WebSocket.
-    /// Falls back to CLI mode if CDP connection fails.
+    /// Starts Obscura in serve mode and connects via raw CDP WebSocket.
     pub async fn launch(
         config: BrowserConfig,
         fingerprint: &FingerprintProfile,
     ) -> Result<Self, EngineError> {
-        info!("Launching Obscura browser engine");
+        info!("Launching Obscura browser engine (raw CDP)");
 
         let binary_path = config.resolve_binary();
         let args = config.build_args();
 
-        // Start Obscura in serve mode as a child process
         let mut cmd = tokio::process::Command::new(&binary_path);
         for arg in &args {
             cmd.arg(arg);
@@ -66,10 +67,8 @@ impl BrowserEngine {
             ))
         })?;
 
-        // Store child process handle so it gets killed on drop
-        let _child_handle = Arc::new(child);
+        let child_handle = Arc::new(child);
 
-        // Wait for Obscura CDP server to be ready
         let ws_url = config.cdp_ws_url();
         let ready = wait_for_cdp_ready(&ws_url, config.timeout_secs).await;
         if !ready {
@@ -79,106 +78,239 @@ impl BrowserEngine {
             )));
         }
 
-        info!(ws_url = %ws_url, "Connecting to Obscura CDP server");
+        info!(ws_url = %ws_url, "Connecting to Obscura via raw CDP WebSocket");
 
-        // Connect to the running Obscura instance via CDP WebSocket
-        let (browser, mut handler) = Browser::connect(&ws_url)
+        let cdp = CdpClient::connect(&ws_url)
             .await
-            .map_err(|e| EngineError::BrowserError(format!("Failed to connect to Obscura: {e}")))?;
-
-        // Spawn the CDP event handler — keep alive even on parse errors
-        tokio::spawn(async move {
-            loop {
-                match handler.next().await {
-                    Some(event) => {
-                        debug!(?event, "CDP event");
-                    }
-                    None => {
-                        // Handler stream ended — Obscura may send non-standard events
-                        // that cause chromiumoxide to close the stream. Sleep and break.
-                        debug!("CDP handler stream ended");
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Brief delay to let the handler stabilize
-        tokio::time::sleep(Duration::from_millis(100)).await;
+            .map_err(|e| EngineError::BrowserError(format!("CDP connect failed: {e}")))?;
 
         let stealth_script = build_stealth_script(fingerprint);
 
         Ok(Self {
-            browser,
-            page: RwLock::new(None),
+            cdp: Arc::new(cdp),
+            current_target: RwLock::new(None),
             stealth_script,
             config,
+            _child: child_handle,
         })
     }
 
-    /// Get the active page, returning an error if none exists.
-    async fn active_page(&self) -> Result<Arc<Page>, EngineError> {
-        let guard = self.page.read().await;
-        guard
-            .clone()
-            .ok_or_else(|| EngineError::Internal("No active page — call navigate() first".into()))
-    }
-
-    /// Create a new page. Attempts stealth script injection but continues without
-    /// it if the engine doesn't support addScriptToEvaluateOnNewDocument (Obscura
-    /// handles stealth natively via --stealth flag).
-    async fn create_stealth_page(&self, url: &str) -> Result<Arc<Page>, EngineError> {
-        let page = self
-            .browser
-            .new_page(url)
+    /// Create a new target (page) and navigate to the URL.
+    /// Injects stealth scripts before navigation completes.
+    async fn create_page(&self, url: &str) -> Result<String, EngineError> {
+        let result = self
+            .cdp
+            .call("Target.createTarget", json!({ "url": "about:blank" }))
             .await
-            .map_err(|e| EngineError::Navigation(format!("Failed to create page: {e}")))?;
+            .map_err(EngineError::from)?;
 
-        // Try to inject stealth scripts — non-fatal if unsupported (Obscura has built-in stealth)
-        if !self.stealth_script.is_empty() {
-            let inject_result = page.execute(
-                chromiumoxide::cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams::new(
-                    &self.stealth_script,
-                ),
+        let target_id = result
+            .get("targetId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| EngineError::BrowserError("No targetId in response".into()))?
+            .to_string();
+
+        // Attach to the target to get a session
+        let attach_result = self
+            .cdp
+            .call(
+                "Target.attachToTarget",
+                json!({ "targetId": &target_id, "flatten": true }),
             )
-            .await;
+            .await
+            .map_err(EngineError::from)?;
+
+        let _session_id = attach_result
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Inject stealth script before navigation (non-fatal if unsupported)
+        if !self.stealth_script.is_empty() {
+            let inject_result = self
+                .cdp
+                .call(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    json!({ "source": &self.stealth_script }),
+                )
+                .await;
 
             if let Err(e) = inject_result {
-                debug!("Stealth script injection skipped (Obscura handles natively): {e}");
+                debug!("Stealth injection skipped (Obscura handles natively): {e}");
             }
         }
 
-        Ok(Arc::new(page))
+        // Enable page events
+        let _ = self.cdp.call("Page.enable", json!({})).await;
+        let _ = self.cdp.call("Network.enable", json!({})).await;
+
+        // Navigate to the actual URL
+        self.cdp
+            .call("Page.navigate", json!({ "url": url }))
+            .await
+            .map_err(|e| EngineError::Navigation(format!("Navigate failed: {e}")))?;
+
+        // Wait for load
+        self.wait_for_load().await?;
+
+        // Store as current target
+        let mut guard = self.current_target.write().await;
+        *guard = Some(target_id.clone());
+
+        Ok(target_id)
     }
 
-    /// Wait for the page to reach a stable state (network idle + DOM loaded).
-    async fn wait_for_stable(&self, page: &Page) -> Result<(), EngineError> {
+    /// Wait for the page to finish loading (poll document.readyState).
+    async fn wait_for_load(&self) -> Result<(), EngineError> {
         let timeout = Duration::from_secs(self.config.timeout_secs);
-        tokio::time::timeout(timeout, page.wait_for_navigation())
+        let start = tokio::time::Instant::now();
+        let poll_interval = Duration::from_millis(CDP_POLL_INTERVAL_MS);
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(EngineError::Timeout(self.config.timeout_secs));
+            }
+
+            let result = self
+                .cdp
+                .call(
+                    "Runtime.evaluate",
+                    json!({ "expression": "document.readyState" }),
+                )
+                .await;
+
+            if let Ok(val) = result {
+                let state = val
+                    .get("result")
+                    .and_then(|r| r.get("value"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if state == "complete" || state == "interactive" {
+                    return Ok(());
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Evaluate JavaScript on the current page and return the result.
+    async fn evaluate(&self, expression: &str) -> Result<Value, EngineError> {
+        let result = self
+            .cdp
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
             .await
-            .map_err(|_| EngineError::Timeout(self.config.timeout_secs))?
-            .map_err(|e| EngineError::Navigation(format!("Navigation wait failed: {e}")))?;
-        Ok(())
+            .map_err(|e| EngineError::BrowserError(format!("JS eval failed: {e}")))?;
+
+        // Check for exception
+        if let Some(exception) = result.get("exceptionDetails") {
+            let text = exception
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown JS exception");
+            return Err(EngineError::BrowserError(format!("JS exception: {text}")));
+        }
+
+        let value = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        Ok(value)
+    }
+
+    /// Get the current page URL via CDP.
+    async fn get_url(&self) -> Result<String, EngineError> {
+        let result = self
+            .cdp
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": "window.location.href", "returnByValue": true }),
+            )
+            .await
+            .map_err(|e| EngineError::BrowserError(format!("Failed to get URL: {e}")))?;
+
+        let url = result
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        Ok(url)
+    }
+
+    /// Fallback screenshot: get page HTML via CDP and render to PNG using hyper-render.
+    /// Used when Page.captureScreenshot is unavailable (Obscura has no visual renderer).
+    async fn screenshot_via_html_render(&self) -> Result<Vec<u8>, EngineError> {
+        // Get the document's outer HTML via DOM.getOuterHTML
+        let doc_result = self
+            .cdp
+            .call("DOM.getDocument", json!({ "depth": 0 }))
+            .await
+            .map_err(|e| {
+                EngineError::ScreenshotFailed(format!("DOM.getDocument failed: {e}"))
+            })?;
+
+        let node_id = doc_result
+            .get("root")
+            .and_then(|r| r.get("nodeId"))
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                EngineError::ScreenshotFailed("No root nodeId in DOM response".into())
+            })?;
+
+        let html_result = self
+            .cdp
+            .call("DOM.getOuterHTML", json!({ "nodeId": node_id }))
+            .await
+            .map_err(|e| {
+                EngineError::ScreenshotFailed(format!("DOM.getOuterHTML failed: {e}"))
+            })?;
+
+        let html = html_result
+            .get("outerHTML")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<html><body>Empty page</body></html>");
+
+        // Render HTML to PNG using hyper-render (pure Rust, no browser needed).
+        // Offload to blocking thread since rendering is CPU-intensive.
+        let html_owned = html.to_string();
+        let width = self.config.viewport_width;
+        let height = self.config.viewport_height;
+
+        let png_bytes = tokio::task::spawn_blocking(move || {
+            use hyper_render::{render_to_png, Config as RenderConfig};
+
+            let render_config = RenderConfig::new().size(width, height);
+
+            render_to_png(&html_owned, render_config)
+                .map_err(|e| EngineError::ScreenshotFailed(format!("HTML render failed: {e}")))
+        })
+        .await
+        .map_err(|e| EngineError::ScreenshotFailed(format!("Render task panicked: {e}")))?;
+
+        png_bytes
     }
 }
 
 #[async_trait]
 impl BrowsingEngine for BrowserEngine {
     async fn navigate(&self, config: &SessionConfig) -> Result<NavigationResult, EngineError> {
-        info!(url = %config.target_url, "Browser navigating");
+        info!(url = %config.target_url, "Browser navigating (raw CDP)");
 
-        let page = self.create_stealth_page(&config.target_url).await?;
-        self.wait_for_stable(&page).await?;
+        self.create_page(&config.target_url).await?;
 
-        let final_url = page
-            .url()
-            .await
-            .map_err(|e| EngineError::Navigation(format!("Failed to get URL: {e}")))?
-            .unwrap_or_else(|| config.target_url.clone());
-
-        // Store as active page
-        let mut guard = self.page.write().await;
-        *guard = Some(page);
+        let final_url = self.get_url().await.unwrap_or(config.target_url.clone());
 
         Ok(NavigationResult {
             final_url,
@@ -190,150 +322,152 @@ impl BrowsingEngine for BrowserEngine {
     }
 
     async fn snapshot(&self, options: &SnapshotOptions) -> Result<PageSnapshot, EngineError> {
-        let page = self.active_page().await?;
-
-        let title = page
+        let title: String = self
             .evaluate("document.title")
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Failed to get title: {e}")))?
-            .into_value::<String>()
-            .unwrap_or_default();
+            .await?
+            .as_str()
+            .unwrap_or("")
+            .to_string();
 
-        let url = page
-            .url()
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Failed to get URL: {e}")))?
-            .unwrap_or_default();
+        let url = self.get_url().await?;
 
-        // Extract accessibility tree via JavaScript
         let scope_selector = options.selector.as_deref().unwrap_or("document.body");
-
         let js = build_snapshot_js(scope_selector, options);
-        let raw: serde_json::Value = page
-            .evaluate(js)
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Snapshot JS failed: {e}")))?
-            .into_value()
-            .map_err(|e| EngineError::BrowserError(format!("Snapshot parse failed: {e}")))?;
 
+        let raw = self.evaluate(&js).await?;
         parse_snapshot_result(&url, &title, &raw)
     }
 
     async fn click(&self, ref_id: &str) -> Result<(), EngineError> {
-        let page = self.active_page().await?;
         info!(ref_id, "Clicking element");
 
-        let selector = resolve_ref_selector(&page, ref_id).await?;
-        page.find_element(&selector)
-            .await
-            .map_err(|e| EngineError::ElementNotFound(format!("{ref_id}: {e}")))?
-            .click()
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Click failed: {e}")))?;
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector('[data-cloudyab-ref="{ref_id}"]');
+                if (!el) return false;
+                el.click();
+                return true;
+            }})()"#
+        );
 
+        let result = self.evaluate(&js).await?;
+        if result.as_bool() != Some(true) {
+            return Err(EngineError::ElementNotFound(ref_id.to_string()));
+        }
         Ok(())
     }
 
     async fn fill(&self, ref_id: &str, text: &str) -> Result<(), EngineError> {
-        let page = self.active_page().await?;
         info!(ref_id, text_len = text.len(), "Filling element");
 
-        let selector = resolve_ref_selector(&page, ref_id).await?;
-        let element = page
-            .find_element(&selector)
-            .await
-            .map_err(|e| EngineError::ElementNotFound(format!("{ref_id}: {e}")))?;
+        let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector('[data-cloudyab-ref="{ref_id}"]');
+                if (!el) return false;
+                el.focus();
+                el.value = '';
+                el.value = '{escaped}';
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()"#
+        );
 
-        // Clear existing value then type
-        element
-            .click()
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Focus failed: {e}")))?;
-
-        page.evaluate(format!("document.querySelector('{selector}').value = ''"))
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Clear failed: {e}")))?;
-
-        element
-            .type_str(text)
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Type failed: {e}")))?;
-
+        let result = self.evaluate(&js).await?;
+        if result.as_bool() != Some(true) {
+            return Err(EngineError::ElementNotFound(ref_id.to_string()));
+        }
         Ok(())
     }
 
     async fn type_text(&self, ref_id: &str, text: &str) -> Result<(), EngineError> {
-        let page = self.active_page().await?;
         info!(ref_id, text_len = text.len(), "Typing into element");
 
-        let selector = resolve_ref_selector(&page, ref_id).await?;
-        let element = page
-            .find_element(&selector)
-            .await
-            .map_err(|e| EngineError::ElementNotFound(format!("{ref_id}: {e}")))?;
+        let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            r#"(() => {{
+                const el = document.querySelector('[data-cloudyab-ref="{ref_id}"]');
+                if (!el) return false;
+                el.focus();
+                for (const ch of '{escaped}') {{
+                    el.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, bubbles: true}}));
+                    el.value += ch;
+                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    el.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, bubbles: true}}));
+                }}
+                return true;
+            }})()"#
+        );
 
-        element
-            .click()
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Focus failed: {e}")))?;
-
-        element
-            .type_str(text)
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Type failed: {e}")))?;
-
+        let result = self.evaluate(&js).await?;
+        if result.as_bool() != Some(true) {
+            return Err(EngineError::ElementNotFound(ref_id.to_string()));
+        }
         Ok(())
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>, EngineError> {
-        let page = self.active_page().await?;
-        let bytes = page
-            .screenshot(
-                chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotParams::builder()
-                    .format(
-                        chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat::Png,
-                    )
-                    .build(),
-            )
-            .await
-            .map_err(|e| EngineError::ScreenshotFailed(format!("{e}")))?;
+        // Try CDP Page.captureScreenshot first (works with Chromium-based backends).
+        // Obscura is a DOM-only engine without a visual renderer, so this will
+        // return a protocol error — fall back to server-side HTML rendering.
+        let cdp_result = self
+            .cdp
+            .call("Page.captureScreenshot", json!({ "format": "png" }))
+            .await;
 
-        Ok(bytes)
+        match cdp_result {
+            Ok(result) => {
+                if let Some(data_b64) = result.get("data").and_then(|v| v.as_str()) {
+                    use base64::Engine as _;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(data_b64)
+                        .map_err(|e| {
+                            EngineError::ScreenshotFailed(format!("Base64 decode: {e}"))
+                        })?;
+                    return Ok(bytes);
+                }
+                // No data field — fall through to HTML rendering
+                debug!("Page.captureScreenshot returned no data, falling back to HTML render");
+            }
+            Err(e) => {
+                debug!("Page.captureScreenshot unsupported ({e}), falling back to HTML render");
+            }
+        }
+
+        // Fallback: get the page HTML via DOM.getOuterHTML and render with hyper-render.
+        self.screenshot_via_html_render().await
     }
 
     async fn get_cookies(&self) -> Result<CookieJar, EngineError> {
-        let page = self.active_page().await?;
+        let url = self.get_url().await?;
 
-        let url = page
-            .url()
-            .await
-            .map_err(|e| EngineError::CookieError(format!("Failed to get URL: {e}")))?
-            .unwrap_or_default();
-
-        let cdp_cookies = page
-            .execute(chromiumoxide::cdp::browser_protocol::network::GetCookiesParams::default())
+        let result = self
+            .cdp
+            .call("Network.getCookies", json!({}))
             .await
             .map_err(|e| EngineError::CookieError(format!("Failed to get cookies: {e}")))?;
 
-        let cookies: Vec<Cookie> = cdp_cookies
-            .result
-            .cookies
+        let cookies_arr = result
+            .get("cookies")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let cookies: Vec<Cookie> = cookies_arr
             .iter()
             .map(|c| Cookie {
-                name: c.name.clone(),
-                value: c.value.clone(),
-                domain: c.domain.clone(),
-                path: c.path.clone(),
+                name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                value: c.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                domain: c.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                path: c.get("path").and_then(|v| v.as_str()).unwrap_or("/").to_string(),
                 expires: None,
-                secure: c.secure,
-                http_only: c.http_only,
-                same_site: match c.same_site.as_ref() {
-                    Some(s) => match s.as_ref() {
-                        "Strict" => SameSite::Strict,
-                        "Lax" => SameSite::Lax,
-                        _ => SameSite::None,
-                    },
-                    None => SameSite::None,
+                secure: c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false),
+                http_only: c.get("httpOnly").and_then(|v| v.as_bool()).unwrap_or(false),
+                same_site: match c.get("sameSite").and_then(|v| v.as_str()) {
+                    Some("Strict") => SameSite::Strict,
+                    Some("Lax") => SameSite::Lax,
+                    _ => SameSite::None,
                 },
             })
             .collect();
@@ -347,38 +481,32 @@ impl BrowsingEngine for BrowserEngine {
     }
 
     async fn set_cookies(&self, cookies: &[Cookie]) -> Result<(), EngineError> {
-        let page = self.active_page().await?;
-
         for cookie in cookies {
-            let params = chromiumoxide::cdp::browser_protocol::network::SetCookieParams::builder()
-                .name(&cookie.name)
-                .value(&cookie.value)
-                .domain(&cookie.domain)
-                .path(&cookie.path)
-                .secure(cookie.secure)
-                .http_only(cookie.http_only)
-                .build()
+            self.cdp
+                .call(
+                    "Network.setCookie",
+                    json!({
+                        "name": cookie.name,
+                        "value": cookie.value,
+                        "domain": cookie.domain,
+                        "path": cookie.path,
+                        "secure": cookie.secure,
+                        "httpOnly": cookie.http_only,
+                    }),
+                )
+                .await
                 .map_err(|e| {
                     EngineError::CookieError(format!(
-                        "Invalid cookie params for '{}': {e}",
+                        "Failed to set cookie '{}': {e}",
                         cookie.name
                     ))
                 })?;
-
-            page.execute(params).await.map_err(|e| {
-                EngineError::CookieError(format!("Failed to set cookie '{}': {e}", cookie.name))
-            })?;
         }
-
         Ok(())
     }
 
     async fn current_url(&self) -> Result<String, EngineError> {
-        let page = self.active_page().await?;
-        page.url()
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Failed to get URL: {e}")))?
-            .ok_or_else(|| EngineError::BrowserError("No URL available".into()))
+        self.get_url().await
     }
 
     async fn can_handle(&self, _url: &str) -> bool {
@@ -386,13 +514,8 @@ impl BrowsingEngine for BrowserEngine {
     }
 
     async fn detect_challenges(&self) -> Vec<DetectedChallenge> {
-        let page = match self.active_page().await {
-            Ok(p) => p,
-            Err(_) => return Vec::new(),
-        };
-
-        let raw: serde_json::Value = match page.evaluate(challenge::detection_script()).await {
-            Ok(result) => result.into_value().unwrap_or(serde_json::Value::Null),
+        let raw = match self.evaluate(challenge::detection_script()).await {
+            Ok(v) => v,
             Err(e) => {
                 debug!("Challenge detection JS failed: {e}");
                 return Vec::new();
@@ -415,25 +538,13 @@ impl BrowsingEngine for BrowserEngine {
         solution: &CaptchaSolution,
         container_selector: Option<&str>,
     ) -> Result<(), EngineError> {
-        let page = self.active_page().await?;
         let js = build_submit_solution_js(solution, container_selector);
-
-        page.evaluate(js)
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("Solution submission failed: {e}")))?;
-
+        self.evaluate(&js).await?;
         Ok(())
     }
 
-    async fn evaluate_js(&self, js: &str) -> Result<serde_json::Value, EngineError> {
-        let page = self.active_page().await?;
-        let result: serde_json::Value = page
-            .evaluate(js.to_string())
-            .await
-            .map_err(|e| EngineError::BrowserError(format!("JS evaluation failed: {e}")))?
-            .into_value()
-            .unwrap_or(serde_json::Value::Null);
-        Ok(result)
+    async fn evaluate_js(&self, js: &str) -> Result<Value, EngineError> {
+        self.evaluate(js).await
     }
 
     fn name(&self) -> &str {
@@ -441,24 +552,27 @@ impl BrowsingEngine for BrowserEngine {
     }
 }
 
-/// Resolve a @eN ref ID to a CSS selector by querying the page's stored ref map.
-async fn resolve_ref_selector(page: &Page, ref_id: &str) -> Result<String, EngineError> {
-    let js = format!(
-        r#"(() => {{
-            const el = document.querySelector('[data-cloudyab-ref="{ref_id}"]');
-            if (!el) return null;
-            return '[data-cloudyab-ref="{ref_id}"]';
-        }})()"#,
-    );
+/// Wait for the Obscura CDP WebSocket server to become ready.
+async fn wait_for_cdp_ready(ws_url: &str, timeout_secs: u64) -> bool {
+    use std::net::TcpStream;
 
-    let result: Option<String> = page
-        .evaluate(js)
-        .await
-        .map_err(|e| EngineError::BrowserError(format!("Ref resolution failed: {e}")))?
-        .into_value()
-        .unwrap_or(None);
+    let addr = ws_url
+        .trim_start_matches("ws://")
+        .split('/')
+        .next()
+        .unwrap_or("127.0.0.1:9223");
 
-    result.ok_or_else(|| EngineError::ElementNotFound(ref_id.to_string()))
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+
+    while tokio::time::Instant::now() < deadline {
+        if TcpStream::connect(addr).is_ok() {
+            tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
+    }
+
+    false
 }
 
 /// Build the JavaScript that extracts the accessibility tree from the DOM.
@@ -566,7 +680,7 @@ return {{refs, tree: lines.join('\\n')}};
 fn parse_snapshot_result(
     url: &str,
     title: &str,
-    raw: &serde_json::Value,
+    raw: &Value,
 ) -> Result<PageSnapshot, EngineError> {
     let tree = raw
         .get("tree")
@@ -617,7 +731,6 @@ fn parse_snapshot_result(
 }
 
 /// Build JavaScript to submit a captcha solution to the page.
-/// Handles different solution types: token injection, text input, slider drag, and coordinates.
 fn build_submit_solution_js(solution: &CaptchaSolution, container: Option<&str>) -> String {
     let container_js = container
         .map(|s| format!("'{s}'"))
@@ -722,33 +835,4 @@ fn build_coords_submit_js(container_js: &str, coords: &[(i32, i32)]) -> String {
     return true;
 }})()"#
     )
-}
-
-/// Poll interval when waiting for CDP server to become ready (ms).
-const CDP_POLL_INTERVAL_MS: u64 = 200;
-
-/// Wait for the Obscura CDP WebSocket server to become ready.
-/// Polls by attempting a TCP connection to the port.
-async fn wait_for_cdp_ready(ws_url: &str, timeout_secs: u64) -> bool {
-    use std::net::TcpStream;
-
-    // Extract host:port from ws://127.0.0.1:9223/devtools/browser
-    let addr = ws_url
-        .trim_start_matches("ws://")
-        .split('/')
-        .next()
-        .unwrap_or("127.0.0.1:9223");
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
-
-    while tokio::time::Instant::now() < deadline {
-        if TcpStream::connect(addr).is_ok() {
-            // Give Obscura a moment to fully initialize after port is open
-            tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(CDP_POLL_INTERVAL_MS)).await;
-    }
-
-    false
 }

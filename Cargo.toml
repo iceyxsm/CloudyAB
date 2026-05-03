@@ -69,8 +69,9 @@ boa_engine = "0.19"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Browser automation (CDP)
-chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+# Raw CDP WebSocket client (replaces chromiumoxide for Obscura compatibility)
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+http = "1"
 
 # Utilities
 bytes = "1"
