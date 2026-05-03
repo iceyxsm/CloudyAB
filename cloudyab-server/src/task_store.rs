@@ -7,7 +7,6 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection};
-use serde_json;
 use tracing::{debug, info};
 
 use crate::task_queue::{TaskEntry, TaskRequest, TaskResult};
@@ -69,7 +68,7 @@ impl TaskStore {
         let result_json = entry
             .result
             .as_ref()
-            .map(|r| serde_json::to_string(r))
+            .map(serde_json::to_string)
             .transpose()?;
         let now = chrono::Utc::now().to_rfc3339();
 

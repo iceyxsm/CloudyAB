@@ -153,30 +153,24 @@ pub fn generate_multi_click_sequence(
 /// Convert an interaction command sequence into JavaScript for CDP execution.
 /// Returns an async JS function that executes the sequence with proper timing.
 pub fn commands_to_js(commands: &[InteractionCommand]) -> String {
-    let mut js_parts = Vec::new();
-    js_parts.push("(async () => {".to_string());
-    js_parts
-        .push("  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }".to_string());
-    js_parts.push("  function dispatch(type, x, y) {".to_string());
-    js_parts.push("    const el = document.elementFromPoint(x, y) || document.body;".to_string());
-    js_parts.push(
+    let mut js_parts = vec![
+        "(async () => {".to_string(),
+        "  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }".to_string(),
+        "  function dispatch(type, x, y) {".to_string(),
+        "    const el = document.elementFromPoint(x, y) || document.body;".to_string(),
         "    el.dispatchEvent(new MouseEvent(type, {clientX:x, clientY:y, bubbles:true}));"
             .to_string(),
-    );
-    js_parts.push("  }".to_string());
-    js_parts.push("  function keyAt(ch) {".to_string());
-    js_parts.push("    const el = document.activeElement || document.body;".to_string());
-    js_parts.push(
+        "  }".to_string(),
+        "  function keyAt(ch) {".to_string(),
+        "    const el = document.activeElement || document.body;".to_string(),
         "    el.dispatchEvent(new KeyboardEvent('keydown', {key:ch, bubbles:true}));".to_string(),
-    );
-    js_parts.push("    if (el.tagName==='INPUT'||el.tagName==='TEXTAREA') {".to_string());
-    js_parts.push("      el.value += ch;".to_string());
-    js_parts.push("      el.dispatchEvent(new Event('input', {bubbles:true}));".to_string());
-    js_parts.push("    }".to_string());
-    js_parts.push(
+        "    if (el.tagName==='INPUT'||el.tagName==='TEXTAREA') {".to_string(),
+        "      el.value += ch;".to_string(),
+        "      el.dispatchEvent(new Event('input', {bubbles:true}));".to_string(),
+        "    }".to_string(),
         "    el.dispatchEvent(new KeyboardEvent('keyup', {key:ch, bubbles:true}));".to_string(),
-    );
-    js_parts.push("  }".to_string());
+        "  }".to_string(),
+    ];
 
     for cmd in commands {
         match cmd {
