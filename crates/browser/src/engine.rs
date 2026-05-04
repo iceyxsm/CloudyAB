@@ -134,6 +134,17 @@ impl BrowserEngine {
             *guard = Some(session_id.clone());
         }
 
+        // Ensure JavaScript execution is enabled for this target
+        let _ = self
+            .session_call(
+                "Emulation.setScriptExecutionDisabled",
+                json!({ "value": false }),
+            )
+            .await;
+
+        // Enable Runtime domain (required for V8 to execute page scripts)
+        let _ = self.session_call("Runtime.enable", json!({})).await;
+
         // Inject stealth script before navigation (non-fatal if unsupported)
         if !self.stealth_script.is_empty() {
             let inject_result = self
