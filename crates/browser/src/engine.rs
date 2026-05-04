@@ -145,6 +145,19 @@ impl BrowserEngine {
         // Enable Runtime domain (required for V8 to execute page scripts)
         let _ = self.session_call("Runtime.enable", json!({})).await;
 
+        // Ensure JavaScript execution is enabled on this page
+        let _ = self
+            .session_call(
+                "Emulation.setScriptExecutionDisabled",
+                json!({ "value": false }),
+            )
+            .await;
+
+        // Bypass CSP to allow our injected scripts and WAF SDK to execute
+        let _ = self
+            .session_call("Page.setBypassCSP", json!({ "enabled": true }))
+            .await;
+
         // Inject stealth script before navigation (non-fatal if unsupported)
         if !self.stealth_script.is_empty() {
             let inject_result = self
